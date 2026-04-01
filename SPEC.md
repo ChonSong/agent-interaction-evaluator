@@ -2,7 +2,8 @@
 
 > **Purpose:** Structured observability for multi-agent ecosystems. Reduce errors, surface assumption drift, produce auditable decision trails. Built on the principles in `agentic-workflow-philosophy.md`.
 >
-> **Status:** Draft — implementation in progress (Phase 1).
+> **Status:** Implementation in progress — Phases 1–2.
+> **Last updated:** 2026-04-01
 
 ---
 
@@ -41,37 +42,38 @@ From `agentic-workflow-philosophy.md`:
 ┌──────────────────────────────────────────────────────────────┐
 │                     Agent Ecosystem                           │
 │  codi · reviewer · g3 · journal · humans (via bot)          │
+│  ClawTeam swarms (delegation + task events)                  │
 └─────────────────────────┬────────────────────────────────────┘
                           │ Structured events (JSONL over IPC)
                           ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                 Agent Interaction Logger (AIL)               │
-│  - Event validator (JSON schema)                             │
-│  - Event router (persist + forward)                           │
-│  - Backpressure handling                                      │
+│  Phase 1: JSON-RPC IPC server + client                      │
+│  Phase 2: txtai indexing on every event emit                 │
 └─────────────────────────┬────────────────────────────────────┘
                           │
               ┌───────────┴───────────┐
               ▼                       ▼
 ┌─────────────────────────┐   ┌──────────────────────────────┐
-│   Local JSONL logfile   │   │   txtai/FAISS Index          │
-│   (raw archive)         │   │   collection: agent_events   │
-│                         │   │   (semantic search + filter)  │
+│   Local JSONL logfile   │   │   txtai/FAISS Index         │
+│   (raw archive)         │   │   collection: agent_events  │
+│   evaluator/data/logs/  │   │   shared w/ RepoTransmute   │
 └─────────────────────────┘   └──────────────────────────────┘
                                       │
                                       ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                    Oracle Engine                              │
-│  - YAML oracle registry (loaded at startup)                   │
+│                    Oracle Engine (Phase 3)                  │
+│  - YAML oracle registry (loaded at startup)                  │
 │  - Per-event-type evaluation rules                           │
-│  - Scoring + deviation flags                                 │
+│  - Condition types: field_required, field_min_length,       │
+│    field_regex, similarity_threshold, drift_score_threshold   │
 └─────────────────────────┬────────────────────────────────────┘
                           │
               ┌───────────┼───────────┬──────────────┐
               ▼           ▼           ▼              ▼
-         Audit Trail   Drift Flag  Alert/Halt    ClawFlow
-         (JSONL/HTML)  (flagged    (Circuit       Orchestration
-                        event)       Breaker gate)  (aie_heartbeat)
+         Audit Trail  Drift Flag  Alert/Halt    ClawFlow
+         (Phase 4)   (Phase 2)  (Phase 5)    Orchestration
+                                              (aie_heartbeat)
 ```
 
 ### Shared Infrastructure with RepoTransmute
@@ -80,15 +82,13 @@ AIE uses the **same txtai/FAISS instance** as RepoTransmute:
 - **RepoTransmute** indexes code blueprints — collection: `blueprints`
 - **AIE** indexes agent interactions — collection: `agent_events`
 - Both share `~/workspace/zoul/repo-transmute/data/txtai/` (FAISS index files)
-- AIE has its own SQLite sidecar for interaction metadata (see §6)
+- AIE has its own SQLite sidecar at `evaluator/data/aie_meta.db`
 
-This is intentional: it enables cross-search — e.g., "find interactions where an agent referenced code chunk X" or "show me all assumption corrections near Blueprint Y".
+This enables cross-search — e.g., "find interactions where an agent referenced code chunk X".
 
 ---
 
 ## 3. Event Schema
-
-All events are JSON. Every event has a **base schema**; each **event type** extends it.
 
 ### 3.1 Base Schema
 
@@ -111,19 +111,11 @@ All events are JSON. Every event has a **base schema**; each **event type** exte
 ### 3.2 Event Types
 
 #### `delegation`
-Emitted when one agent (or human) delegates a task to another.
-
 ```json
 {
   "event_type": "delegation",
-  "delegator": {
-    "agent_id": "string",
-    "role": "string"
-  },
-  "delegate": {
-    "agent_id": "string",
-    "role": "string"
-  },
+  "delegator": { "agent_id": "string", "role": "string" },
+  "delegate": { "agent_id": "string", "role": "string" },
   "task": {
     "task_id": "uuid",
     "description": "string",
@@ -139,8 +131,6 @@ Emitted when one agent (or human) delegates a task to another.
 ```
 
 #### `tool_call`
-Emitted when an agent invokes a tool.
-
 ```json
 {
   "event_type": "tool_call",
@@ -164,8 +154,6 @@ Emitted when an agent invokes a tool.
 ```
 
 #### `assumption`
-Emitted when an agent states an assumption (explicit belief about state).
-
 ```json
 {
   "event_type": "assumption",
@@ -181,8 +169,6 @@ Emitted when an agent states an assumption (explicit belief about state).
 ```
 
 #### `correction`
-Emitted when an agent revises a prior assumption or action.
-
 ```json
 {
   "event_type": "correction",
@@ -201,19 +187,11 @@ Emitted when an agent revises a prior assumption or action.
 ```
 
 #### `drift_detected`
-Emitted internally when the drift detector flags a contradiction.
-
 ```json
 {
   "event_type": "drift_detected",
-  "current_assumption": {
-    "event_id": "event_id",
-    "statement": "string"
-  },
-  "contradicted_by": {
-    "event_id": "event_id",
-    "statement": "string"
-  },
+  "current_assumption": { "event_id": "event_id", "statement": "string" },
+  "contradicted_by": { "event_id": "event_id", "statement": "string" },
   "contradiction_type": "direct|semantic|implicit",
   "drift_score": 0.0,
   "action_taken": "flagged|halted|alerted"
@@ -221,8 +199,6 @@ Emitted internally when the drift detector flags a contradiction.
 ```
 
 #### `circuit_breaker`
-Emitted when a Circuit Breaker gate halts an action.
-
 ```json
 {
   "event_type": "circuit_breaker",
@@ -239,15 +215,10 @@ Emitted when a Circuit Breaker gate halts an action.
 ```
 
 #### `human_input`
-Emitted when a human provides input that affects agent behaviour.
-
 ```json
 {
   "event_type": "human_input",
-  "human": {
-    "id": "string",
-    "role": "string"
-  },
+  "human": { "id": "string", "role": "string" },
   "input": {
     "type": "string",
     "content": "string",
@@ -264,12 +235,10 @@ Emitted when a human provides input that affects agent behaviour.
 
 ## 4. Oracle Definition Format
 
-Oracles are YAML files. Each oracle defines what "correct" looks like for a given scenario.
-
 ### 4.1 Directory Structure
 
 ```
-evaluator/oracles/
+agent-interaction-evaluator/oracles/
   ├── _registry.yaml
   ├── delegation/
   │   ├── no_empty_context.yaml
@@ -288,144 +257,475 @@ evaluator/oracles/
 ### 4.2 Oracle Schema
 
 ```yaml
-oracle_id: "no_empty_context"
-name: "Delegation must include context summary"
+oracle_id: "unique_oracle_id"
+name: "Human-readable name"
 description: |
-  When an agent delegates a task, the context_summary field
-  must not be empty. Empty context is a leading indicator of
-  context bankruptcy (Philosophy §V).
-event_type: "delegation"
-trigger: "on_event"
-severity: "critical"
+  Detailed description of what this oracle evaluates.
+event_type: "delegation|tool_call|assumption|..."
+trigger: "on_event|on_demand|on_cron"
+severity: "critical|warning|info"
 conditions:
-  - type: "field_required"
-    field: "task.context_summary"
-    value: { "not_empty": true }
-  - type: "field_min_length"
-    field: "task.context_summary"
-    value: { "min_length": 20 }
+  - type: "field_required"           # condition type (see §4.3)
+    field: "path.to.field"
+    value: { ... }
 actions:
-  - type: "flag"
-    output: "drift_event"
-  - type: "alert"
-    output: "discord"
-    channel: "evaluator-alerts"
-  - type: "halt"
-    condition: "context_fidelity < 0.3"
+  - type: "flag|alert|halt"
+    output: "drift_event|discord|..."
 metadata:
   author: "sean"
   created: "2026-04-01"
-  tags: ["context", "delegation", "reliability"]
+  tags: ["context", "delegation"]
   philosophy_ref: "Pillar-3"
 ```
 
-### 4.3 Oracle Evaluation Engine
+### 4.3 Condition Types
 
-The engine:
-1. Loads all oracles from `evaluator/oracles/` at startup
-2. On each incoming event, finds matching oracles (by `event_type`)
-3. Evaluates all `conditions` against the event
-4. If any condition fails and `severity` is `critical` → emit `circuit_breaker` event
-5. If any condition fails → emit `drift_detected` or `flag` event
-6. Runs `actions` — flag, alert, halt, audit
-7. Supports **semantic contradiction checks** using txtai similarity on `assumption.statement` vs all prior assumptions in the index
+| Type | Description | Fields |
+|---|---|---|
+| `field_required` | Field exists and is not None | `field: str` |
+| `field_not_empty` | Field is not empty string or empty list | `field: str` |
+| `field_min_length` | String field minimum length | `field: str`, `min_length: int` |
+| `field_max_length` | String field maximum length | `field: str`, `max_length: int` |
+| `field_regex` | Field matches regex pattern | `field: str`, `pattern: str` |
+| `field_eq` | Field equals value | `field: str`, `value: Any` |
+| `field_gt` | Numeric field greater than | `field: str`, `value: float` |
+| `field_lt` | Numeric field less than | `field: str`, `value: float` |
+| `field_in` | Field value in list | `field: str`, `values: list` |
+| `similarity_threshold` | txtai similarity vs reference text | `field: str`, `reference: str`, `threshold: float` |
+| `drift_score_threshold` | Drift score comparison | `threshold: float`, `op: gt\|lt\|gte\|lte` |
+| `ratio_threshold` | Ratio of N events meeting condition | `events: list`, `condition: dict`, `threshold: float`, `op: gt\|lt` |
 
----
+### 4.4 Action Types
 
-## 5. Core Components
-
-### 5.1 `ailogger` — Agent Interaction Logger
-
-```
-ailogger [command]
-
-Commands:
-  serve        Run the logger as a local IPC server (Unix socket)
-  emit         Emit a single event (for testing / human input)
-  replay       Replay events from a JSONL log file
-  status       Show logger health and event counts
-```
-
-**IPC Protocol:** JSON-RPC 2.0 over Unix socket `/tmp/ailogger.sock`
-
-**Backpressure:** If txtai indexing lags, events are queued to local JSONL buffer and replayed on recovery. No events are dropped.
-
-**Security:** No secrets in event arguments. The logger sanitises fields matching `PASSWORD`, `SECRET`, `TOKEN`, `KEY`, `API_KEY` before persisting.
-
-### 5.2 `aidrift` — Drift Detector
-
-```
-aidrift [command]
-
-Commands:
-  check <event_id>    Check a specific assumption event for drift
-  scan [--session S]  Scan all sessions for drift since last check
-  report              Generate drift summary report
-  stats               Show drift statistics
-```
-
-**Drift Algorithm:**
-1. On each `assumption` event, embed `assumption.statement` using the txtai model
-2. Query the `agent_events` collection for prior assumptions with cosine similarity > 0.85
-3. If a prior assumption contradicts the current one, flag as `drift_detected`
-4. `contradiction_type`:
-   - `direct` — similar text, different conclusion (similarity ≥ 0.95)
-   - `semantic` — different text, same meaning (similarity 0.85–0.95)
-   - `implicit` — logically incompatible (NLI model, v2)
-
-### 5.3 `aieval` — Oracle Evaluator
-
-```
-aieval [command]
-
-Commands:
-  evaluate <event_file>   Evaluate a single event against all applicable oracles
-  evaluate --stdin         Evaluate events from JSON lines on stdin
-  oracle list              List all loaded oracles
-  oracle validate          Validate oracle YAML syntax
-  oracle run [--oracle ID] Run specific oracle against recent events
-  report [--since YYYY-MM-DD]  Generate evaluation report
-```
-
-**Evaluation modes:**
-- `on_event` — synchronous, evaluated as events arrive (for critical oracles)
-- `on_demand` — triggered via CLI or API
-- `on_cron` — scheduled batch evaluation (see §7)
-
-### 5.4 `aiaudit` — Audit Trail Exporter
-
-```
-aiaudit [command]
-
-Commands:
-  trail <session_id>       Generate full audit trail for a session
-  trail --event-id <id>    Show trail leading up to a specific event
-  export [--format html|json|md]   Export trail(s)
-  diff <session_a> <session_b>  Compare two session trails
-  prune --before <date>    Archive and delete old trails
-```
+| Type | Behaviour |
+|---|---|
+| `flag` | Write drift event to SQLite drift_log, mark event in index |
+| `alert` | Send Discord alert via alerts.py |
+| `halt` | Emit circuit_breaker event, halt session if halt_session=true |
+| `log` | Write to JSONL log only |
+| `audit` | Include in next audit trail generation |
 
 ---
 
-## 6. Data Storage
+## 5. Phase 2 — Drift Detection (txtai + Semantic)
 
-### 6.1 txtai Collections
+### 5.1 txtai Client
+
+**Inherits from RepoTransmute's `TxtaiClient` pattern** — same FAISS index, separate `agent_events` collection.
+
+```python
+class AIETxtaiClient(TxtaiClient):
+    """Extends RepoTransmute TxtaiClient with AIE-specific collection."""
+    COLLECTION = "agent_events"
+    DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+    def index_event(self, event: dict) -> None:
+        """Index a single event. Embeds text field, stores metadata in SQLite."""
+        doc = self._build_doc(event)
+        self.index([doc])
+
+    def query_assumptions(
+        self,
+        text: str,
+        session_id: str | None = None,
+        top_k: int = 10
+    ) -> list[dict]:
+        """Find prior assumptions similar to text."""
+
+    def query_events(
+        self,
+        filters: dict,
+        top_k: int = 50
+    ) -> list[dict]:
+        """Query events by event_type, agent_id, session_id, since."""
+
+    def get_stats(self) -> dict:
+        """Return collection size, last updated."""
+```
+
+### 5.2 Drift Detection Algorithm
+
+```
+For each new assumption event:
+  1. Embed assumption.statement → vector
+  2. Query agent_events collection for prior assumption events
+     (same session_id OR global, top_k=10)
+  3. For each prior assumption with similarity > 0.85:
+     - similarity ≥ 0.95 → contradiction_type = "direct"
+     - 0.85 ≤ similarity < 0.95 → contradiction_type = "semantic"
+       (Phase 7: NLI second-pass to distinguish contradiction vs neutral)
+  4. If contradiction found:
+     - Create DriftResult
+     - Index drift_detected event
+     - Insert into SQLite drift_log
+     - If drift_score ≥ 0.9 → critical → trigger circuit_breaker
+```
+
+### 5.3 txtai Document Schema
+
+```python
+{
+    "id": "event_id",  # used as UID
+    "text": "assumption: {statement} | category: {category} | agent: {agent_id}",
+    "event_type": "assumption",
+    "event_id": "uuid",
+    "agent_id": "string",
+    "session_id": "string",
+    "timestamp": "ISO-8601",
+    "statement": "string",  # the assumption text for drift comparison
+    "category": "string",
+    "drift_score": 0.0,
+    "oracles_triggered": []
+}
+```
+
+---
+
+## 6. Phase 3 — Oracle Engine
+
+### 6.1 Registry
+
+```python
+class OracleRegistry:
+    """Loads and manages all oracle definitions."""
+
+    def load(self, path: str = "oracles/") -> None:
+        """Walk oracles/ directory, load all .yaml files."""
+
+    def get_for_event_type(self, event_type: str) -> list[Oracle]:
+        """Return all oracles that apply to an event type."""
+
+    def get(self, oracle_id: str) -> Oracle | None
+
+    def list(self) -> list[Oracle]:
+        """Return all loaded oracles."""
+
+    def validate(self, oracle_id: str) -> tuple[bool, str | None]:
+        """Validate oracle YAML syntax and condition types."""
+```
+
+### 6.2 Condition Evaluators
+
+```python
+class FieldRequiredEvaluator:
+    def evaluate(self, event: dict, field: str) -> bool
+
+class FieldMinLengthEvaluator:
+    def evaluate(self, event: dict, field: str, min_length: int) -> bool
+
+class FieldRegexEvaluator:
+    def evaluate(self, event: dict, field: str, pattern: str) -> bool
+
+class SimilarityThresholdEvaluator:
+    def evaluate(self, event: dict, field: str, reference: str, threshold: float) -> bool
+    # Uses AIETxtaiClient.similarity()
+
+class RatioThresholdEvaluator:
+    def evaluate(self, events: list[dict], condition: dict, threshold: float) -> bool
+    # For session-level aggregates (e.g., error rate > 20%)
+```
+
+### 6.3 Evaluation Flow
+
+```
+On event emit (or on_demand / on_cron batch):
+  1. Load all oracles for event_type
+  2. For each oracle:
+     a. Evaluate all conditions in sequence (AND logic)
+     b. If any condition fails:
+        - Record ConditionResult(passed=False, failed_conditions=[...], deviation=str)
+        - Execute actions based on severity:
+          critical → circuit_breaker event + alert
+          warning → drift_flag event + alert
+          info → log only
+     c. If all pass:
+        - Record ConditionResult(passed=True)
+  3. Insert all ConditionResults into SQLite oracle_results table
+```
+
+### 6.4 Session-Level Oracle Evaluation (on_cron)
+
+For `on_cron` oracles (e.g., error_recovery_rate):
+- Batch evaluate all events in last 24h per session
+- Run ratio conditions across the event set
+- Emit results as aggregate oracle results
+
+---
+
+## 7. Phase 4 — Audit Trails
+
+### 7.1 Audit Trail Schema
+
+```python
+@dataclass
+class AuditTrail:
+    audit_id: str
+    session_id: str
+    span: {"start": str, "end": str}
+    agents: list[str]
+    decision_chain: list[DecisionNode]
+    summary: AuditSummary
+
+@dataclass
+class DecisionNode:
+    event_id: str
+    event_type: str
+    timestamp: str
+    agent_id: str
+    description: str          # human-readable summary
+    assumptions_used: list[str]  # assumption event IDs
+    oracles_applied: list[str]   # oracle IDs
+    oracle_results: list[OracleResult]
+    drift_flags: list[str]
+    consequential: bool       # True for delegation/correction/circuit_breaker
+    human_in_loop: bool      # True for human_input events
+
+@dataclass
+class AuditSummary:
+    total_events: int
+    drift_events: int
+    circuit_breaker_halts: int
+    human_interventions: int
+    oracles_passed: int
+    oracles_failed: int
+```
+
+### 7.2 Trail Generation
+
+```python
+class AuditGenerator:
+    def build_trail(self, session_id: str) -> AuditTrail | None:
+        """Build full audit trail from txtai events + SQLite metadata."""
+        # 1. Query all events for session (ordered by timestamp)
+        # 2. Query all oracle results for session
+        # 3. Query all drift events for session
+        # 4. Build decision_chain:
+        #    - Mark consequential events (delegation, correction, circuit_breaker)
+        #    - Link assumptions_used to assumption event IDs
+        #    - Link oracle_results to applied oracles
+        #    - Link drift_flags to drift_detected events
+        # 5. Compute AuditSummary
+
+    def get_consequential_events(self, session_id: str) -> list[dict]:
+        """Return only consequential events for a session."""
+```
+
+### 7.3 Export Formats
+
+| Format | Use case |
+|---|---|
+| JSON | Machine parsing, diff |
+| Markdown | Human review, documentation |
+| HTML | Web dashboard (future) |
+
+### 7.4 Session Diff
+
+```python
+def diff(trail_a: AuditTrail, trail_b: AuditTrail) -> AuditDiff:
+    """Compare two audit trails."""
+    # Differences in:
+    # - total_events, drift_events, circuit_breaker_halts
+    # - decision_chain length and content
+    # - oracle pass/fail rates
+    # - drift patterns
+```
+
+---
+
+## 8. Phase 5 — ClawFlow Orchestration
+
+### 8.1 The `aie_heartbeat` Flow
+
+```
+Flow: "aie_heartbeat"
+Owner: zoul main session (agent:zoul)
+Purpose: Autonomous monitoring and evaluation
+
+Steps:
+
+Step 1: DRIFT_SCAN
+  script: |
+    aidrift scan --all --since 6h
+  on_result (drifts):
+    if any drift.drift_score >= 0.9:
+      → circuit_breaker event
+      → send_alert(critical, channel="#evaluator-alerts")
+    if any drift:
+      → log to drift_report/YYYY-MM-DD.json
+      → continue
+
+Step 2: ORACLE_BATCH
+  script: |
+    aieval batch --since 24h --trigger on_cron
+  on_result (results):
+    if any result.oracle.severity == critical and result.passed == False:
+      → circuit_breaker event
+      → send_alert(critical)
+    if any failures:
+      → log to oracle_report/YYYY-MM-DD.json
+
+Step 3: AUDIT_TRAILS
+  script: |
+    sessions = get_active_sessions_since 24h
+    for session in sessions:
+      if session has drift or failures:
+        aiaudit trail {session} --export json
+  output: audit_trails/{session_id}/{date}.json
+
+Step 4: HEALTH_CHECK
+  script: |
+    ailogger status
+    # check: buffered_events < 100, txtai reachable, logger_uptime > 0
+  on_result (health):
+    if not healthy:
+      send_alert(warning, "AIE health check failed")
+
+Step 5: SET_WAITING
+  set_flow_waiting(seconds=1800)  # 30 minutes
+
+Resume from Step 1.
+```
+
+### 8.2 Cron Trigger
+
+Minimal crontab entry — just wakes the flow:
+
+```bash
+# Every hour: if flow is idle, trigger it
+0 * * * * openclaw flow trigger aie_heartbeat --if-idle >> evaluator/data/logs/cron_trigger.log 2>&1
+```
+
+The actual work lives in the flow, not in crontab.
+
+### 8.3 Alert Routing
+
+| Severity | Action |
+|---|---|
+| `critical` | Discord `#evaluator-alerts` + halt session |
+| `warning` | Discord `#evaluator-alerts` |
+| `info` | Logged to `evaluator/data/logs/info.log` |
+
+---
+
+## 9. Phase 6 — Agent Integration
+
+### 9.1 How Agents Emit Events
+
+**Option A — IPC (preferred):** Agent calls `AILoggerClient.emit(event)` over Unix socket.
+
+**Option B — File drop:** Agent writes JSONL to `evaluator/data/inbox/`. Logger watches and ingests.
+
+### 9.2 codi Integration
+
+codi is the priority — most active, regular delegation patterns.
+
+**Events to emit:**
+- `delegation` — on every `sessions_spawn` call
+- `tool_call` — on every `read`, `write`, `exec` call
+- `assumption` — on explicit "Assuming..." in agent output
+- `correction` — on "Wait, actually...", "Correction:..."
+
+**Implementation:** Wrap codi's tool calls in a thin event-emitting layer:
+```python
+# In codi's tool wrapper
+from evaluator.logger_client import AILoggerClient
+
+async def wrapped_sessions_spawn(args):
+    event = build_delegation_event(args)
+    client = AILoggerClient()
+    await client.emit(event)
+    result = await original_sessions_spawn(args)
+    # emit outcome event
+    await client.close()
+    return result
+```
+
+### 9.3 reviewer Integration
+
+Same as codi, but prioritising `assumption` and `correction` events.
+
+### 9.4 g3 Integration
+
+Via sidecar Python wrapper that reads g3's output logs and emits events.
+
+### 9.5 ClawTeam Swarm Integration
+
+When ClawTeam swarms emit delegation events, those can feed directly into AIE:
+- ClawTeam's `delegation` events → AIE `delegation` events
+- ClawTeam's task board events → AIE `tool_call` events
+
+### 9.6 Priority Order
+
+| Agent | Priority | Reason |
+|---|---|---|
+| codi | 1 | Most active, clean delegation patterns |
+| reviewer | 2 | Assumption-heavy |
+| ClawTeam swarms | 3 | Natural delegation events |
+| g3 | 4 | Complex, uncommitted changes |
+| journal | 5 | Structured but low-stakes |
+
+---
+
+## 10. Phase 7 — Advanced Drift (v2)
+
+### 10.1 NLI Second-Pass
+
+For `semantic` contradictions (similarity 0.85–0.95), run NLI to distinguish `contradiction` from `neutral`:
+
+```python
+from sentence_transformers import CrossEncoder
+
+model = CrossEncoder("cross-encoder/nli-deberta-v3-small")
+
+def check_implicit_contradiction(statement1: str, statement2: str) -> str:
+    scores = model.predict([(statement1, statement2)])
+    # scores: [contradiction, entailment, neutral]
+    label = ["contradiction", "entailment", "neutral"][scores.argmax()]
+    return label  # contradiction | entailment | neutral
+```
+
+Only flag as `implicit` drift if NLI returns `contradiction` on semantically similar pairs.
+
+### 10.2 Context Fidelity Scoring
+
+Track how much context survives each delegation:
+
+```python
+def compute_context_fidelity(delegation_event, downstream_events):
+    original_context = delegation_event["task"]["context_summary"]
+    referenced_in_subsequent = count_context_references(original_context, downstream_events)
+    return min(referenced_in_subsequent / 3, 1.0)  # 0.0 to 1.0
+```
+
+Flag delegations with fidelity < 0.3 as critical.
+
+### 10.3 Cascade Impact Analysis
+
+When a critical drift occurs, trace downstream events that may have been affected:
+
+```python
+def trace_cascade(drift_event, all_events):
+    """Find all events that used the invalidated assumption."""
+    assumption_id = drift_event["invalidated_assumption_ids"][0]
+    affected = []
+    for event in all_events:
+        if assumption_id in event.get("derived_from", []):
+            affected.append(event)
+    return affected
+```
+
+---
+
+## 11. Data Storage
+
+### 11.1 txtai Collections
 
 | Collection | Purpose |
 |---|---|
 | `blueprints` | RepoTransmute code blueprints |
-| `agent_events` | All AIE interaction events |
+| `agent_events` | AIE interaction events |
 
-**`agent_events` index fields:**
-```
-event_id (primary key), event_type, agent_id, session_id, timestamp,
-assumption_statement (full-text search for drift), task_description,
-oracles_triggered, severity, drift_score
-```
-
-### 6.2 SQLite Sidecar
-
-AIE maintains a SQLite database at `evaluator/data/aie_meta.db`:
+### 11.2 SQLite Sidecar (`evaluator/data/aie_meta.db`)
 
 ```sql
 CREATE TABLE sessions (
@@ -434,9 +734,9 @@ CREATE TABLE sessions (
   channel TEXT,
   started_at TEXT,
   ended_at TEXT,
-  event_count INTEGER,
-  drift_count INTEGER,
-  circuit_breaker_halts INTEGER
+  event_count INTEGER DEFAULT 0,
+  drift_count INTEGER DEFAULT 0,
+  circuit_breaker_halts INTEGER DEFAULT 0
 );
 
 CREATE TABLE oracle_results (
@@ -461,349 +761,85 @@ CREATE TABLE drift_log (
 
 ---
 
-## 7. Autonomous Orchestration — ClawFlow
+## 12. CLI Reference
 
-AIE uses **ClawFlow** for autonomous operation — not raw crontab. This follows the same methodology as RepoTransmute's autonomous task cascade.
-
-### 7.1 Why ClawFlow
-
-| | Raw cron | ClawFlow |
-|---|---|---|
-| State between runs | None (stateless) | Persists — flow tracks what was done |
-| Failure handling | Exit code only | Flow state → resume from failure point |
-| Inspection | Logs only | `openclaw flow status aie_heartbeat` |
-| Multi-step coordination | Chain in shell | Native step→step with wait states |
-| Human intervention | Kill cron, fix, restart | `openclaw flow steer aie_heartbeat` |
-
-### 7.2 The `aie_heartbeat` Flow
-
+### ailogger
 ```
-Flow: "aie_heartbeat"
-Owner: zoul main session
-
-Step 1: aidrift scan --all-sessions
-  → If critical drift found → emit alert → halt → notify
-  → If minor drift → flag → continue
-
-Step 2: aieval oracle batch --since 24h
-  → If critical oracle failure → circuit_breaker → alert
-  → If warnings → log
-
-Step 3: aiaudit trail --sessions-with-drift
-  → Write audit trail to data/audit_trails/
-
-Step 4: health_check
-  → ailogger alive? txtai reachable? backpressure clear?
-
-Set flow waiting (30 min)
-Resume → repeat
+ailogger serve          Start IPC server
+ailogger emit --stdin   Emit event from stdin
+ailogger status         Show logger health
 ```
 
-### 7.3 Cron Trigger (minimal)
-
-A lightweight cron entry wakes the ClawFlow if it is idle:
-
-```bash
-# Entry point — lightweight, just wakes the flow
-0 * * * * openclaw flow trigger aie_heartbeat --if-idle
+### aidrift
+```
+aidrift check <event_id>        Check one event for drift
+aidrift scan --session <id>     Scan one session
+aidrift scan --all              Scan all active sessions
+aidrift report                  Print open drifts as JSON
+aidrift stats                  Print drift statistics
 ```
 
-The actual work happens inside the Flow — it persists across cron invocations, tracks state, and can be inspected/resumed.
-
-### 7.4 Alert Routing
-
-| Severity | Action |
-|---|---|
-| `critical` | Discord alert to `#evaluator-alerts`, halt session |
-| `warning` | Discord alert, logged to drift_log |
-| `info` | Logged only |
-
-### 7.5 Scheduled Jobs
-
-| Job | Schedule (AEST) | What it does |
-|---|---|---|
-| `drift_scan` | Every 6 hours (via ClawFlow) | Scan all active sessions for unreported drift |
-| `oracle_batch` | Every 24h 02:00 (via ClawFlow) | Run all `on_cron` oracles against recent events |
-| `audit_prune` | Weekly Sunday 03:00 (via ClawFlow) | Archive trails > 30 days |
-| `health_check` | Every 30 min (via ClawFlow) | Verify logger alive, txtai reachable |
-
----
-
-## 8. Agent Integration
-
-### 8.1 How Agents Emit Events
-
-Agents do **not** need to be modified directly. AIE provides two integration paths:
-
-**Option A — IPC (preferred):**
-```python
-from evaluator.logger_client import AILoggerClient
-client = AILoggerClient(socket_path="/tmp/ailogger.sock")
-client.emit(event_dict)
+### aieval
+```
+aieval evaluate <file>         Evaluate event file
+aieval evaluate --stdin         Evaluate from stdin
+aieval oracle list              List all oracles
+aieval oracle validate          Validate oracle YAML
+aieval oracle run --oracle <id> Run specific oracle
+aieval batch --since <date>     Batch evaluate (on_cron)
+aieval report --since <date>    Evaluation report
 ```
 
-**Option B — File drop:**
-Agents write JSONL to `evaluator/data/inbox/`. The logger watches the directory and ingests.
-
-### 8.2 OpenClaw Agent Integration
-
-OpenClaw agents emit events via a thin wrapper. A logger subprocess runs alongside the agent ecosystem.
-
-**Mapping OpenClaw session events → AIE events:**
-- `delegation` = spawning a subagent or handing off to another agent
-- `tool_call` = any tool invocation (read, write, exec, sessions_spawn)
-- `assumption` = explicit "Assuming..." statements in agent reasoning
-- `correction` = "Wait, actually...", "Correction:..." in agent output
-- `human_input` = heartbeat responses, approvals, corrections from humans
-
-### 8.3 Priority Integration Order
-
-| Agent | Priority | Reason |
-|---|---|---|
-| `codi` | 1 | Most active, regular delegation events |
-| `reviewer` | 2 | Assumption-heavy, clear oracle opportunities |
-| `g3` | 3 | Rust agent with uncommitted changes, high complexity |
-| `journal` | 4 | Regular structured output, good test case |
-
----
-
-## 9. API
-
-### 9.1 Logger API (IPC)
-
-```json
-// JSON-RPC 2.0 over Unix socket
-
-// emit
-{"jsonrpc": "2.0", "method": "emit", "params": {"event": {...}}, "id": 1}
-
-// emit_batch
-{"jsonrpc": "2.0", "method": "emit_batch", "params": {"events": [...]}, "id": 2}
-
-// status
-{"jsonrpc": "2.0", "method": "status", "params": {}, "id": 3}
-→ {"jsonrpc": "2.0", "result": {"events_received": N, "buffered": M, "logger_uptime": S}, "id": 3}
+### aiaudit
 ```
-
-### 9.2 CLI API
-
-All CLI commands listed in §5.
-
-### 9.3 REST API (future)
-
+aiaudit trail <session_id>      Generate audit trail
+aiaudit trail --event-id <id>   Trail leading to event
+aiaudit export --format md|json|html --session <id>
+aiaudit diff <session_a> <session_b>
+aiaudit prune --before <date>
 ```
-GET  /events?session_id=&agent_id=&event_type=&since=&limit=
-GET  /events/<event_id>
-GET  /sessions
-GET  /sessions/<session_id>/audit
-GET  /drift?since=&severity=
-GET  /oracles
-POST /oracles/validate
-GET  /report?since=&format=html
-```
-
----
-
-## 10. Directory Structure
-
-```
-agent-interaction-evaluator/
-├── SPEC.md
-├── README.md
-├── REQUIREMENTS.md
-├── pyproject.toml
-├── src/
-│   └── evaluator/
-│       ├── __init__.py
-│       ├── logger.py             # ailogger implementation
-│       ├── logger_client.py      # thin client for agents
-│       ├── drift.py              # aidrift implementation
-│       ├── evaluator.py          # aieval implementation
-│       ├── audit.py              # aiaudit implementation
-│       ├── oracle_engine.py      # oracle loading + evaluation
-│       ├── schema.py              # event schema + validation
-│       ├── txtai_client.py        # shared txtai/FAISS client
-│       ├── db.py                  # SQLite sidecar
-│       ├── sanitiser.py           # removes secrets from events
-│       └── alerts.py              # Discord alert integration
-├── oracles/                      # oracle definitions (YAML)
-│   ├── _registry.yaml
-│   ├── delegation/
-│   ├── assumption/
-│   ├── tool_call/
-│   └── circuit_breaker/
-├── data/
-│   ├── aie_meta.db
-│   ├── logs/                    # raw JSONL event logs
-│   ├── audit_trails/            # generated audit trails
-│   └── inbox/                   # drop directory for agents
-├── tests/
-│   ├── test_schema.py
-│   ├── test_oracle_engine.py
-│   ├── test_drift.py
-│   ├── test_logger.py
-│   ├── test_txtai_client.py
-│   ├── test_audit.py
-│   └── fixtures/
-└── scripts/
-    └── cron_setup.sh           # installs crontab (minimal trigger only)
-```
-
----
-
-## 11. Dependencies
-
-```
-# Core
-python>=3.11
-txtai>=6.0.0
-faiss-cpu
-jsonschema
-pyyaml
-aiosqlite
-
-# Optional (implicit drift detection, v2)
-# cross-encoder/nli-deberta-v3-small
-
-# Testing
-pytest>=8.0.0
-pytest-asyncio
-
-# Infrastructure
-openclaw (for ClawFlow)
-```
-
----
-
-## 12. Testing Strategy
-
-### 12.1 Unit Tests
-
-| Test file | What it covers |
-|---|---|
-| `test_schema.py` | All event types validate correctly; invalid events rejected |
-| `test_sanitiser.py` | Secrets stripped, allowed fields preserved |
-| `test_oracle_engine.py` | Each condition type evaluates correctly |
-| `test_drift.py` | Direct and semantic drift detection |
-
-### 12.2 Integration Tests
-
-| Test file | What it covers |
-|---|---|
-| `test_logger.py` | Logger IPC, buffering, backpressure, replay |
-| `test_txtai_client.py` | Round-trip: event → index → query |
-| `test_audit.py` | Session trail generation, diff |
-
-### 12.3 Oracle Validation Tests
-
-Each oracle has a corresponding YAML test fixture:
-```json
-// oracles/delegation/no_empty_context.fixture.json
-{
-  "oracle_id": "no_empty_context",
-  "fixtures": [
-    { "event": { "task": { "context_summary": "" } }, "expect": "fail" },
-    { "event": { "task": { "context_summary": "Because the file was missing" } }, "expect": "pass" }
-  ]
-}
-```
-
-### 12.4 Golden Session Tests
-
-Real agent session logs (anononymised) stored as fixtures. Run full pipeline on them, assert:
-- No unexpected drift flags
-- Correct oracle pass/fail counts
-- Audit trail completeness
 
 ---
 
 ## 13. Development Phases
 
-### Phase 1 — Foundation
-- [ ] Project scaffold (`pyproject.toml`, dir structure)
-- [ ] Event schema (`schema.py`) with full JSON schema
-- [ ] Logger IPC server + client (`logger.py`, `logger_client.py`)
-- [ ] Secret sanitiser (`sanitiser.py`)
-- [ ] SQLite sidecar (`db.py`)
-- [ ] 3 basic oracles (one per event type)
-- [ ] Unit tests (schema, sanitiser, oracles)
-
-**Deliverable:** `ailogger serve` + `ailogger emit` functional
-
-### Phase 2 — Indexing + Drift
-- [ ] txtai client (`txtai_client.py`) — shared with RepoTransmute
-- [ ] Index events into `agent_events` collection
-- [ ] `aidrift check` — direct drift detection
-- [ ] `aidrift scan` — session-wide drift scan
-- [ ] txtai integration tests
-
-**Deliverable:** `aidrift scan` functional against real events
-
-### Phase 3 — Oracle Engine + Evaluation
-- [ ] Oracle registry loader (`oracle_engine.py`)
-- [ ] All condition types implemented
-- [ ] `aieval` CLI with list/validate/evaluate
-- [ ] 5 oracles across 3 event types
-- [ ] Oracle validation tests
-
-**Deliverable:** `aieval oracle run` functional
-
-### Phase 4 — Audit Trails
-- [ ] `audit.py` — trail generation
-- [ ] `aiaudit trail` CLI
-- [ ] Export formats (JSON, Markdown)
-- [ ] Session diff
-- [ ] Audit trail tests
-
-**Deliverable:** `aiaudit trail <session_id>` produces complete trail
-
-### Phase 5 — ClawFlow Orchestration + Alerts
-- [ ] ClawFlow `aie_heartbeat` flow definition
-- [ ] `cron_setup.sh` — minimal cron trigger (`openclaw flow trigger aie_heartbeat --if-idle`)
-- [ ] Discord alert integration (`alerts.py`)
-- [ ] Health check step in flow
-- [ ] Alert routing by severity
-
-**Deliverable:** `openclaw flow trigger aie_heartbeat` runs full evaluation cycle
-
-### Phase 6 — Agent Integration
-- [ ] codi integration (priority 1)
-- [ ] reviewer integration (priority 2)
-- [ ] g3 integration (priority 3)
-- [ ] OpenClaw session → AIE event mapping
-- [ ] Real session golden tests
-
-**Deliverable:** Live events from real agents flowing into AIE
-
-### Phase 7 — Advanced Drift (v2)
-- [ ] Semantic drift detection (cross-encoder NLI)
-- [ ] `implicit` contradiction type
-- [ ] Context fidelity scoring
-- [ ] Cascade impact analysis
+| Phase | Status | Deliverable |
+|---|---|---|
+| 1 — Foundation | ✅ Complete | ailogger serve + emit, schema, sanitiser, SQLite, 3 oracles |
+| 2 — txtai + Drift | 🔄 In Progress | AIETxtaiClient, aidrift scan, txtai indexing |
+| 3 — Oracle Engine | 📋 Planned | Full oracle registry, condition evaluators, aieval CLI |
+| 4 — Audit Trails | 📋 Planned | AuditGenerator, aiaudit trail/export/diff |
+| 5 — ClawFlow | 📋 Planned | aie_heartbeat flow, cron_setup.sh, alerts |
+| 6 — Agent Integration | 📋 Planned | codi → AIE event emission |
+| 7 — Advanced Drift | 📋 Planned | NLI second-pass, context fidelity, cascade tracing |
 
 ---
 
 ## 14. Open Questions
 
-| # | Question | Decision needed from |
+| # | Question | Decision needed |
 |---|---|---|
-| 1 | Which channel for alerts — `#evaluator-alerts` or DMs? | Sean |
-| 2 | Do we instrument `g3` despite uncommitted changes? | Sean |
-| 3 | Semantic drift (NLI model) — v1 or v2? | Alto/Sean |
-| 4 | Should AIE logs be git-ignored or tracked? | Alto |
+| 1 | Alert channel — `#evaluator-alerts` or DM to Sean? | Sean |
+| 2 | Do we instrument g3 despite uncommitted changes? | Sean |
+| 3 | Semantic drift NLI confirmation in v1 or v2? | v2 (Phase 7) |
+| 4 | AIE logs git-ignored? | Yes (data/ is gitignored) |
 
 **Resolved:**
-- Own repo ✅ (repo created: `ChonSong/agent-interaction-evaluator`)
+- Own repo ✅ (github.com/ChonSong/agent-interaction-evaluator)
 - Autonomous methodology ✅ (ClawFlow, not raw cron)
+- txtai reuse ✅ (extend RepoTransmute pattern, share index)
+- Drift thresholds ✅ (≥0.95 direct, 0.85–0.95 semantic, NLI in v2)
 
 ---
 
 ## 15. References
 
 - `agentic-workflow-philosophy.md` — founding document
-- `repo-transmute/` — existing txtai/FAISS infrastructure
-- `TOOLS.md` §txtai — current txtai architecture
+- `repo-transmute/src/repo_transmute/txtai/client.py` — TxtaiClient pattern
+- `repo-transmute/src/repo_transmute/evaluator/drift_detector.py` — keyword-based drift detection (RepoTransmute's existing approach)
+- `docs/PHASE2-RESEARCH.md` — research sprint findings
 - `clawflow/SKILL.md` — ClawFlow runtime substrate
-- `repo-transmute/adr-001-automatic-task-cascade.md` — autonomous methodology reference
-- Philosophy §V — the five failure modes AIE addresses
-- Philosophy §VI — the Circuit Breaker critique of paperclip
+- `HKUDS/ClawTeam` — swarm orchestration (complementary, not overlapping)
+- `cross-encoder/nli-deberta-v3-small` — NLI model for Phase 7
+- Philosophy §V — five failure modes
+- Philosophy §VI — Circuit Breaker critique

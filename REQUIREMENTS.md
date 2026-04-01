@@ -14,183 +14,80 @@
 - All CLI commands: `ailogger`, `aidrift`, `aieval`, `aiaudit`
 - All event JSON uses the schema in `SPEC.md §3`
 - No external services. Runs on existing workspace infra.
-- Autonomous work uses **ClawFlow** (not raw crontab) — see SPEC.md §7
+- Autonomous work uses **ClawFlow** (not raw crontab) — see SPEC.md §8
 - Breaking changes to schema must update `SPEC.md` simultaneously.
+- txtai reuse: share the same FAISS index as RepoTransmute, create separate `agent_events` collection
 
 ---
 
-## Phase 1 — Foundation
+## Phase 1 — Foundation ✅ COMPLETE
 
-### P1.1 Project Scaffold
-
-- [ ] `pyproject.toml` created with:
-  - Name: `agent-interaction-evaluator`
-  - Python `>=3.11`
-  - Dependencies: `txtai>=6.0.0`, `faiss-cpu`, `jsonschema`, `pyyaml`, `aiosqlite`
-  - Dev dependencies: `pytest>=8.0.0`, `pytest-asyncio`
-  - Entry points: `ailogger`, `aidrift`, `aieval`, `aiaudit` console scripts
-  - `src/evaluator/` as package
-- [ ] `src/evaluator/__init__.py` exists (package marker, `__version__ = "0.1.0"`)
-- [ ] `evaluator/data/`, `evaluator/data/logs/`, `evaluator/data/audit_trails/`, `evaluator/data/inbox/` created
-- [ ] `evaluator/tests/` created with `__init__.py`
-- [ ] `.gitignore` created (ignores `data/`, `*.pyc`, `__pycache__/`, `.pytest_cache/`)
-
-### P1.2 Event Schema
-
-- [ ] `src/evaluator/schema.py` implements:
-  - `BASE_EVENT_FIELDS` — all fields from SPEC.md §3.1
-  - `EVENT_SCHEMAS` — dict of event_type → dict schema (delegation, tool_call, assumption, correction, drift_detected, circuit_breaker, human_input)
-  - `validate_event(event: dict) -> tuple[bool, str | None]` — returns (valid, error_message)
-  - `get_schema(event_type: str) -> dict` — returns the schema for an event type
-  - `generate_event_id() -> str` — UUID v4
-  - `get_current_timestamp() -> str` — ISO-8601
-- [ ] `tests/test_schema.py`:
-  - Valid event for each type passes validation
-  - Invalid event (missing required field, wrong type) fails with specific error
-  - Unknown event_type fails gracefully
-  - `generate_event_id()` returns valid UUID v4
-  - `get_current_timestamp()` returns valid ISO-8601
-
-### P1.3 Secret Sanitiser
-
-- [ ] `src/evaluator/sanitiser.py` implements:
-  - `SANITISE_FIELDS = ["PASSWORD", "SECRET", "TOKEN", "KEY", "API_KEY", "AUTHORIZATION", "CREDENTIAL", "PRIVATE_KEY", "ACCESS_TOKEN"]`
-  - `sanitise_event(event: dict) -> dict` — replaces matching top-level and nested keys with `"[REDACTED]"`, does NOT remove keys
-  - Recursive — handles nested dicts and lists
-  - Case-insensitive field matching (e.g., `api_key` matches `API_KEY`)
-- [ ] `tests/test_sanitiser.py`:
-  - Event with secrets in top-level field → value replaced, key preserved
-  - Event with secrets in nested dict → all levels sanitised
-  - Event with secrets in list of dicts → all items sanitised
-  - Event with no secrets → unchanged
-  - Case-insensitive matching: `api_key` and `Api_Key` both sanitised
-
-### P1.4 SQLite Sidecar
-
-- [ ] `src/evaluator/db.py` implements:
-  - `init_db(db_path: str)` — creates tables if not exist
-  - `insert_session(session: dict)` — upsert into sessions table
-  - `insert_oracle_result(result: dict)` — insert into oracle_results
-  - `insert_drift_log(drift: dict)` — insert into drift_log
-  - `get_session(session_id: str) -> dict | None`
-  - `get_open_drifts() -> list[dict]` — unresolved drifts only
-  - `resolve_drift(drift_id: str)` — set resolved_at
-  - All methods use aiosqlite, are async
-  - `db_path` configurable via env `AIE_DB_PATH`
-- [ ] `tests/test_db.py`:
-  - `init_db` creates tables
-  - insert + retrieve session roundtrips correctly
-  - insert + retrieve oracle result roundtrips correctly
-  - `get_open_drifts` returns only unresolved drifts
-  - `resolve_drift` sets resolved_at
-
-### P1.5 Logger IPC Server
-
-- [ ] `src/evaluator/logger.py` implements `AILogger` class:
-  - Binds to Unix socket `/tmp/ailogger.sock` (configurable via env `AILOGGER_SOCKET`)
-  - JSON-RPC 2.0 protocol
-  - Methods: `emit(event: dict)`, `emit_batch(events: list[dict])`, `status() -> dict`
-  - On `emit`: validate → sanitise → write to JSONL log file (`data/logs/YYYY-MM-DD.jsonl`) → write to SQLite session → forward to txtai index (async, non-blocking)
-    → if txtai unavailable, buffer in memory; do NOT drop event
-  - On `emit_batch`: iterate and call emit
-  - On `status`: return `{"events_received": N, "buffered": M, "logger_uptime_seconds": S}`
-  - On invalid JSON-RPC → return error response per JSON-RPC spec
-- [ ] `ailogger serve` CLI — starts the server, logs PID to `data/ailogger.pid`
-- [ ] `ailogger status` CLI — connects to socket and prints status as JSON
-- [ ] `ailogger emit --stdin` CLI — reads one JSON event from stdin and emits it
-- [ ] `tests/test_logger.py`:
-  - Mock socket, send valid event → received and persisted
-  - Send invalid event → error returned, not persisted
-  - Backpressure: txtai down → event buffered, recovered on txtai up
-  - Status returns correct counts
-
-### P1.6 Logger Client
-
-- [ ] `src/evaluator/logger_client.py` implements `AILoggerClient`:
-  - Connects to `/tmp/ailogger.sock` (configurable)
-  - `emit(event: dict) -> bool` — returns True on success, raises on error
-  - `emit_batch(events: list[dict]) -> bool`
-  - `status() -> dict`
-  - Context manager (`async with AILoggerClient() as client:`)
-  - `close()`
-- [ ] `tests/test_logger_client.py` — integration test against real logger socket (skip if socket unavailable)
-
-### P1.7 Basic Oracles (3 minimum)
-
-Create one oracle per event type:
-
-- [ ] `oracles/delegation/no_empty_context.yaml`
-  - Trigger: `on_event`
-  - Condition: `task.context_summary` not empty, min 20 chars
-  - Severity: `critical`
-  - Action: `flag`
-- [ ] `oracles/assumption/no_confidence_zero.yaml`
-  - Trigger: `on_event`
-  - Condition: `assumption.confidence > 0.0`
-  - Severity: `warning`
-  - Action: `flag`
-- [ ] `oracles/tool_call/no_secret_exposure.yaml`
-  - Trigger: `on_event`
-  - Condition: `tool.arguments` sanitises clean (re-run sanitiser on emitted event, compare)
-  - Severity: `critical`
-  - Action: `halt`
-  - Note: Tests that the logger's own sanitiser works correctly
-
-### P1.8 Phase 1 Tests Pass
-
-```bash
-pytest tests/test_schema.py tests/test_sanitiser.py tests/test_db.py -x -q
-```
-
-All must pass. No skips. No xfails.
+All items completed in previous sprint. See commit `746a4a7`.
 
 ---
 
-## Phase 2 — Indexing + Drift
+## Phase 2 — txtai Indexing + Drift Detection
 
-### P2.1 txtai Client
+### P2.1 AIETxtaiClient (src/evaluator/txtai_client.py)
 
-- [ ] `src/evaluator/txtai_client.py` implements:
-  - `TXTaiClient` — connects to shared RepoTransmute txtai instance at `~/workspace/zoul/repo-transmute/data/txtai/`
-  - `index_event(event: dict)` — embeds relevant text fields, indexes into `agent_events` collection
-    - Embeds: `event_id`, `event_type`, `agent_id`, `session_id`, `timestamp`, `assumption_statement`, `task_description`
-    - Uses `sentence-transformers/all-MiniLM-L6-v2` embedding (same as RepoTransmute)
-    - Configurable via env `TXTai_INDEX_PATH`
-  - `query_assumptions(text: str, session_id: str | None = None, top_k: int = 10) -> list[dict]`
-    - Returns prior assumptions with similarity scores
-  - `query_events(filters: dict, top_k: int = 50) -> list[dict]`
-  - `get_index_stats() -> dict` — collection size, last updated
-  - `ensure_collection()` — creates `agent_events` collection if not exists
-  - Graceful fallback: if txtai unavailable, log warning and return empty results (do NOT crash)
+**Important:** Extend RepoTransmute's `TxtaiClient` pattern, do NOT rewrite. Import from RepoTransmute where possible.
+
+- [ ] Import `TxtaiClient` from `repo_transmute.txtai.client` (path: `~/workspace/zoul/repo-transmute/src/`)
+- [ ] `AIETxtaiClient` class extends/uses `TxtaiClient`:
+  - `index_dir`: `~/workspace/zoul/repo-transmute/data/txtai/` (shared with RepoTransmute)
+  - `COLLECTION_NAME = "agent_events"` (separate from RepoTransmute's `blueprints`)
+  - `DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"`
+- [ ] `ensure_collection()` — create `agent_events` collection if not exists
+- [ ] `index_event(event: dict)` — build doc per schema in SPEC.md §5.3, embed the text field, store metadata in SQLite sidecar
+- [ ] `query_assumptions(text: str, session_id: str | None, top_k: int = 10) -> list[dict]` — semantic search for prior assumptions
+- [ ] `query_events(filters: dict, top_k: int = 50) -> list[dict]` — query by event_type, agent_id, session_id, since
+- [ ] `get_stats() -> dict` — collection size, last updated
+- [ ] Graceful fallback: if txtai unavailable, log warning and return empty (do NOT crash)
+- [ ] **Note:** Do NOT import the entire RepoTransmute repo (circular dependency risk). Only import `TxtaiClient` directly.
 
 ### P2.2 Drift Detection — aidrift CLI
 
-- [ ] `src/evaluator/drift.py` implements `DriftDetector`:
+- [ ] `src/evaluator/drift.py` — `DriftDetector` class:
   - `check(event_id: str, event: dict) -> DriftResult | None`
     - Get `assumption.statement` from event
-    - Query txtai for prior assumptions (session-scope or global)
+    - Query txtai for prior assumptions in same session (session_id filter)
     - For each prior assumption with similarity > 0.85:
-      - Compare statements
-      - If `similarity >= 0.95` → `direct` contradiction
-      - If `0.85 <= similarity < 0.95` → `semantic` contradiction
-    - Return `DriftResult` with `drift_score`, `contradiction_type`, `contradicted_by_event_id`
+      - similarity ≥ 0.95 → `direct`
+      - 0.85 ≤ similarity < 0.95 → `semantic`
+    - Return `DriftResult` with: event_id, contradicted_event_id, contradiction_type, drift_score (=similarity), current_statement, prior_statement
     - Return `None` if no drift found
   - `scan_session(session_id: str) -> list[DriftResult]`
-  - `scan_all_active() -> list[DriftResult]`
-  - `DriftResult` dataclass: `event_id, contradicted_event_id, contradiction_type, drift_score, current_statement, prior_statement`
-- [ ] `aidrift check <event_id>` CLI
+  - `scan_all_active() -> list[DriftResult]` — scan sessions with events in last 7 days
+- [ ] `DriftResult` dataclass: `event_id, contradicted_event_id, contradiction_type, drift_score, current_statement, prior_statement`
+- [ ] `aidrift check <event_id>` CLI — reads event from `data/logs/YYYY-MM-DD/` or as JSON arg
 - [ ] `aidrift scan --session <session_id>` CLI
-- [ ] `aidrift scan --all` CLI — scan all active sessions
-- [ ] `aidrift report` CLI — prints summary of all open drifts as JSON
-- [ ] `aidrift stats` CLI — prints drift statistics
+- [ ] `aidrift scan --all` CLI — scan all active sessions (last 7 days)
+- [ ] `aidrift report` CLI — print open drifts as JSON
+- [ ] `aidrift stats` CLI — print drift statistics
 
-### P2.3 txtai Integration Tests
+### P2.3 Logger txtai Integration
 
-- [ ] `tests/test_txtai_client.py`:
-  - `test_index_and_query_roundtrip` — index a synthetic event, query it back
-  - `test_query_by_session` — query returns only events from specified session
-  - `test_get_index_stats` — returns non-zero collection size after indexing
-  - `test_graceful_fallback` — when txtai is unavailable, returns empty without crashing
+- [ ] Update `AILogger.emit()` in `logger.py` to call `AIETxtaiClient.index_event()` after persisting to JSONL
+- [ ] This should be async and non-blocking — do NOT block the emit if txtai is slow
+- [ ] If txtai is unavailable, buffer the event in memory and retry later
+
+### P2.4 txtai Integration Tests (tests/test_txtai_client.py)
+
+- [ ] `test_index_and_query_roundtrip` — index a synthetic event, query it back
+- [ ] `test_query_by_session` — query returns only events from specified session
+- [ ] `test_get_stats` — returns non-zero collection size after indexing
+- [ ] `test_graceful_fallback` — when txtai unavailable, returns empty without crashing
+- [ ] `test_drift_detection_direct` — two nearly identical assumption statements → similarity ≥ 0.95 → `direct`
+- [ ] `test_drift_detection_semantic` — two different but similar statements → similarity 0.85–0.95 → `semantic`
+- [ ] `test_drift_detection_none` — unrelated statements → no drift flagged
+
+### P2.5 Phase 2 Tests Pass
+
+```bash
+pytest tests/test_txtai_client.py tests/test_drift.py -x -q
+```
+
+All must pass. No skips. No xfails.
 
 ---
 
@@ -198,108 +95,141 @@ All must pass. No skips. No xfails.
 
 ### P3.1 Oracle Registry
 
-- [ ] `oracles/_registry.yaml` created listing all oracles
-- [ ] `src/evaluator/oracle_engine.py` implements:
+- [ ] `src/evaluator/oracle_engine.py`:
+  - `Oracle` dataclass — all fields from SPEC.md §4.2
+  - `ConditionResult` dataclass — `passed: bool, failed_conditions: list[str], deviation: str | None`
   - `OracleRegistry` class:
-    - `load(path: str = "oracles/")` — walks directory, loads all YAML files, validates schema
-    - `get_oracles_for_event_type(event_type: str) -> list[Oracle]`
-    - `get_oracle(oracle_id: str) -> Oracle | None`
-    - `list_oracles() -> list[Oracle]`
-    - `validate_oracle(oracle_id: str) -> tuple[bool, str | None]`
-  - `Oracle` dataclass: all fields from SPEC.md §4.2
-  - `Condition` evaluation classes: one per condition type
-    - `FieldRequired` — field exists and not None
-    - `FieldMinLength` — field value has min length
-    - `FieldRegex` — field matches regex pattern
-    - `SimilarityThreshold` — txtai similarity against a reference statement
-    - `DriftScoreThreshold` — drift score comparison
-  - `evaluate_conditions(oracle: Oracle, event: dict) -> ConditionResult`
-  - `ConditionResult` dataclass: `passed: bool, failed_conditions: list[str], deviation: str | None`
+    - `load(path: str = "oracles/")` — walk directory, load all YAML, validate schema
+    - `get_for_event_type(event_type: str) -> list[Oracle]`
+    - `get(oracle_id: str) -> Oracle | None`
+    - `list() -> list[Oracle]`
+    - `validate(oracle_id: str) -> tuple[bool, str | None]`
 
-### P3.2 Oracle CLI — aieval
+### P3.2 Condition Evaluators
 
-- [ ] `aieval evaluate <event_file>` — load event, evaluate against all applicable oracles, print results as JSON
+Implement one class per condition type:
+
+- [ ] `FieldRequiredEvaluator` — field exists and not None
+- [ ] `FieldNotEmptyEvaluator` — field is not empty string or empty list
+- [ ] `FieldMinLengthEvaluator` — string field minimum length
+- [ ] `FieldMaxLengthEvaluator` — string field maximum length
+- [ ] `FieldRegexEvaluator` — field matches regex pattern
+- [ ] `FieldEqEvaluator` — field equals value
+- [ ] `FieldGtEvaluator` — numeric field greater than
+- [ ] `FieldLtEvaluator` — numeric field less than
+- [ ] `FieldInEvaluator` — field value in list
+- [ ] `SimilarityThresholdEvaluator` — uses AIETxtaiClient.similarity() to compare field text against reference
+- [ ] `DriftScoreThresholdEvaluator` — drift score comparison (threshold, op)
+- [ ] `RatioThresholdEvaluator` — ratio of N events meeting condition (for session-level aggregates)
+
+### P3.3 Oracle Evaluation
+
+- [ ] `evaluate_conditions(oracle: Oracle, event: dict) -> ConditionResult`
+  - Evaluate all conditions in sequence (AND — all must pass for oracle to pass)
+  - Return ConditionResult with passed status and list of failed conditions
+- [ ] `apply_actions(oracle: Oracle, event: dict, result: ConditionResult) -> None`
+  - If passed: no action (or log if oracle severity is info)
+  - If failed + critical: emit circuit_breaker event + send alert
+  - If failed + warning: emit drift_detected event + send alert
+  - If failed + info: log only
+- [ ] `evaluate_event(event: dict) -> list[ConditionResult]` — evaluate all applicable oracles for event type
+
+### P3.4 aieval CLI
+
+- [ ] `aieval evaluate <event_file>` — load event, evaluate against applicable oracles, print results as JSON
 - [ ] `aieval evaluate --stdin` — read JSON lines from stdin, evaluate each
-- [ ] `aieval oracle list` — list all loaded oracles with IDs, event_type, severity, trigger
-- [ ] `aieval oracle validate` — validate all oracle YAML files, print errors or "All valid"
+- [ ] `aieval oracle list` — list all loaded oracles with ID, event_type, severity, trigger
+- [ ] `aieval oracle validate` — validate all oracle YAML files, print "All valid" or errors
 - [ ] `aieval oracle run --oracle <id>` — run specific oracle against recent events (last 24h)
+- [ ] `aieval batch --since YYYY-MM-DD --trigger on_cron` — batch evaluate all `on_cron` oracles
 - [ ] `aieval report --since YYYY-MM-DD` — generate evaluation summary report as JSON
 
-### P3.3 Full Oracle Set (5 oracles)
+### P3.5 Full Oracle Set (8 oracles total)
+
+Existing 3 from Phase 1, add 5 more:
 
 - [ ] `oracles/delegation/context_fidelity_threshold.yaml`
+  - Trigger: `on_event`, Severity: `warning`
   - Condition: `task.context_fidelity >= 0.5`
-  - Severity: `warning`
 - [ ] `oracles/assumption/groundedness_required.yaml`
+  - Trigger: `on_event`, Severity: `info`
   - Condition: `assumption.grounded_in` is not null
-  - Severity: `info`
 - [ ] `oracles/tool_call/schema_compliance.yaml`
-  - Condition: `tool.argument_schema` exists and arguments conform
-  - Severity: `warning`
-- [ ] `oracles/tool_call/error_recovery_rate.yaml` (session-level aggregate)
-  - Trigger: `on_cron`
-  - Aggregates last 24h of `tool_call` events per session
-  - Flags if error rate > 20%
-  - Severity: `warning`
+  - Trigger: `on_event`, Severity: `warning`
+  - Condition: `tool.argument_schema` exists → arguments conform
+- [ ] `oracles/tool_call/error_recovery_rate.yaml`
+  - Trigger: `on_cron`, Severity: `warning`
+  - Condition: session error rate > 20% in last 24h → ratio_threshold on tool_call events with outcome.status=error
 - [ ] `oracles/circuit_breaker/halt_on_critical_drift.yaml`
+  - Trigger: `on_event`, Severity: `critical`
   - Condition: `drift_score >= 0.9`
-  - Severity: `critical`
   - Action: `halt`
 
-### P3.4 Oracle Engine Tests
+### P3.6 Oracle Engine Tests (tests/test_oracle_engine.py)
 
-- [ ] `tests/test_oracle_engine.py`:
-  - All condition types evaluate correctly
-  - Oracle with failing condition → ConditionResult.passed = False
-  - Oracle with all passing → ConditionResult.passed = True
-  - Unknown oracle_id → graceful error
-  - Duplicate oracle_id → raises ValueError
-  - `oracle validate` passes all current oracles
+- [ ] All condition types evaluate correctly (12 tests — one per condition type)
+- [ ] Oracle with failing condition → ConditionResult.passed = False
+- [ ] Oracle with all passing → ConditionResult.passed = True
+- [ ] Unknown oracle_id → returns None gracefully
+- [ ] `oracle validate` passes all current oracles
+- [ ] `apply_actions` calls correct action type for each severity level
+
+### P3.7 Phase 3 Tests Pass
+
+```bash
+pytest tests/test_oracle_engine.py -x -q
+```
 
 ---
 
 ## Phase 4 — Audit Trails
 
-### P4.1 Audit Trail Generator
+### P4.1 AuditGenerator
 
-- [ ] `src/evaluator/audit.py` implements `AuditGenerator`:
-  - `build_trail(session_id: str) -> AuditTrail | None`
-    - Query all events for session from txtai (ordered by timestamp)
-    - Query all oracle results for session from SQLite
-    - Query all drift logs for session from SQLite
-    - Build `DecisionChain` — list of `DecisionNode` with:
-      - `event_id, event_type, timestamp, agent_id`
-      - `description` — human-readable summary of the event
-      - `assumptions_used` — event IDs of assumptions referenced
-      - `oracles_applied` — oracle IDs evaluated against this event
-      - `oracle_results` — pass/fail/deviation per oracle
-      - `drift_flags` — any drift event IDs linked to this event
-      - `consequential` — True if event_type is in `["delegation", "circuit_breaker", "correction"]`
-      - `human_in_loop` — True if event_type == "human_input"
-    - Compute `AuditSummary`: total_events, drift_events, circuit_breaker_halts, human_interventions
-    - Return `AuditTrail` dataclass
-  - `DecisionNode` dataclass: all fields above
-  - `AuditTrail` dataclass: `audit_id, session_id, span, agents, decision_chain, summary`
-  - `get_consequential_events(session_id: str) -> list[dict]` — filtered view
+- [ ] `src/evaluator/audit.py`:
+  - `DecisionNode` dataclass — all fields from SPEC.md §7.1
+  - `AuditSummary` dataclass — `total_events, drift_events, circuit_breaker_halts, human_interventions, oracles_passed, oracles_failed`
+  - `AuditTrail` dataclass — `audit_id, session_id, span, agents, decision_chain, summary`
+  - `AuditGenerator` class:
+    - `__init__(self, txtai_client: AIETxtaiClient, db_path: str)`
+    - `build_trail(session_id: str) -> AuditTrail | None`
+      - Query txtai for all events in session (ordered by timestamp)
+      - Query SQLite for oracle results and drift logs
+      - Build decision_chain with consequential flag (delegation, correction, circuit_breaker = True)
+      - Compute summary stats
+      - Return AuditTrail
+    - `get_consequential_events(session_id: str) -> list[dict]`
 
-### P4.2 aiaudit CLI
+### P4.2 Session Diff
 
-- [ ] `aiaudit trail <session_id>` — generate and print audit trail for session
+- [ ] `diff(trail_a: AuditTrail, trail_b: AuditTrail) -> AuditDiff`
+  - Compare: total_events, drift_events, circuit_breaker_halts, oracle pass/fail rates
+  - Return struct with before/after values and delta
+
+### P4.3 aiaudit CLI
+
+- [ ] `aiaudit trail <session_id>` — generate and print audit trail as JSON
 - [ ] `aiaudit trail --event-id <id>` — show trail leading up to event
-- [ ] `aiaudit export --format html --session <id>` — export trail as HTML
 - [ ] `aiaudit export --format json --session <id>` — export trail as JSON
-- [ ] `aiaudit export --format md --session <id>` — export trail as Markdown
+- [ ] `aiaudit export --format md --session <id>` — export as Markdown
+- [ ] `aiaudit export --format html --session <id>` — export as HTML
 - [ ] `aiaudit diff <session_a> <session_b>` — diff two session trails
-- [ ] `aiaudit prune --before YYYY-MM-DD` — archive trails older than date, delete raw events
+- [ ] `aiaudit prune --before YYYY-MM-DD` — archive trails older than date
 
-### P4.3 Audit Tests
+### P4.4 Audit Tests (tests/test_audit.py)
 
-- [ ] `tests/test_audit.py`:
-  - Build trail for session with 5 events → AuditTrail.decision_chain has 5 nodes
-  - `consequential` flag set correctly for each event type
-  - `human_in_loop` True only for human_input events
-  - Export to JSON roundtrips correctly
-  - `prune` removes events before date but not after
+- [ ] `test_build_trail` — build trail for session with 5 events → 5 nodes
+- [ ] `test_consequential_flag` — delegation/correction/circuit_breaker = True, others = False
+- [ ] `test_human_in_loop_flag` — only human_input = True
+- [ ] `test_export_json_roundtrip` — export + parse = identical
+- [ ] `test_export_markdown` — produces valid markdown with sections
+- [ ] `test_prune` — removes events before date, keeps events after
+
+### P4.5 Phase 4 Tests Pass
+
+```bash
+pytest tests/test_audit.py -x -q
+```
 
 ---
 
@@ -307,47 +237,41 @@ All must pass. No skips. No xfails.
 
 ### P5.1 ClawFlow Definition
 
-- [ ] Write ClawFlow definition for `aie_heartbeat` flow (see SPEC.md §7.2)
-- [ ] Flow file: `evaluator/flows/aie_heartbeat.lobster` or equivalent
-- [ ] Steps:
-  1. `aidrift scan --all` → collect drift results
-  2. For each critical drift → `circuit_breaker` event → alert
-  3. `aieval oracle batch --since 24h` → collect oracle results
-  4. For each critical failure → `circuit_breaker` event → alert
-  5. `aiaudit trail --sessions-with-drift` → write audit trails
-  6. `aidrift stats` → log summary
-  7. Set waiting state (30 min)
-  8. Resume → repeat from step 1
+- [ ] Create `evaluator/flows/aie_heartbeat.lobster` or equivalent (see SPEC.md §8.1 for flow definition)
+- [ ] Flow steps:
+  1. `aidrift scan --all --since 6h`
+  2. For each critical drift → circuit_breaker + alert
+  3. `aieval batch --since 24h --trigger on_cron`
+  4. For each critical failure → circuit_breaker + alert
+  5. `aiaudit trail` for sessions with drift or failures
+  6. `aidrift stats` + log summary
+  7. `set_flow_waiting(seconds=1800)` — 30 min
 
 ### P5.2 Cron Trigger
 
-- [ ] `evaluator/scripts/cron_setup.sh` created:
-  - Installs minimal crontab: `0 * * * * openclaw flow trigger aie_heartbeat --if-idle`
-  - Adds `TZ=Australia/Sydney` at top of crontab
-  - Only installs the cron trigger, not the full job logic (that's in ClawFlow)
-- [ ] `evaluator/scripts/cron_setup.sh --uninstall` removes the crontab
+- [ ] `evaluator/scripts/cron_setup.sh`:
+  - Installs crontab: `0 * * * * openclaw flow trigger aie_heartbeat --if-idle >> evaluator/data/logs/cron_trigger.log 2>&1`
+  - `TZ=Australia/Sydney` at top
+  - `--uninstall` flag removes the crontab
+  - Dry-run mode: `--dry-run` prints crontab without installing
 
 ### P5.3 Alert Integration
 
-- [ ] `src/evaluator/alerts.py` implements:
+- [ ] `src/evaluator/alerts.py`:
   - `send_alert(message: str, severity: str, channel: str = "evaluator-alerts")`
-  - Uses OpenClaw Discord message tool: `openclaw message --channel <channel> <message>`
+  - Uses `openclaw message --channel <channel> <message>`
   - Configurable via env: `ALERT_CHANNEL`
-  - Severity mapping:
-    - `critical` → immediate Discord alert + exit code 1
-    - `warning` → Discord alert
-    - `info` → logged only
-- [ ] Critical drift: any `drift_score >= 0.9` → send Discord alert
-- [ ] Circuit breaker halt: immediately send alert
-- [ ] Oracle failure (critical): send alert
-- [ ] Health check failure: send alert
+  - Severity: critical → exit 1 after alert; warning → alert only; info → logged
+- [ ] Alert templates:
+  - Critical drift: "🚨 CRITICAL DRIFT in session {session_id}: {statement} contradicts {prior_statement}"
+  - Critical oracle failure: "🚨 ORACLE FAILURE: {oracle_id} failed on {event_type} event"
+  - Warning: "⚠️ {type}: {summary}"
 
-### P5.4 Health Check
+### P5.4 Phase 5 — Verification
 
-- [ ] `evaluator/scripts/health_check.sh`:
-  - Checks: logger socket alive, txtai reachable, no backpressure queue > 100, disk space > 10%
-  - Exits 0 if healthy, exits 1 if not
-  - Run as step in ClawFlow, not as standalone cron
+- [ ] `openclaw flow trigger aie_heartbeat --if-idle` runs without error
+- [ ] Alert fires correctly on simulated critical drift
+- [ ] Crontab installs and cron fires correctly
 
 ---
 
@@ -355,33 +279,63 @@ All must pass. No skips. No xfails.
 
 ### P6.1 codi Integration
 
-- [ ] Instrument `codi` agent to emit events via `AILoggerClient`
-- [ ] Emit `delegation` events on every subagent spawn
-- [ ] Emit `tool_call` events on every tool invocation (read, write, exec, sessions_spawn)
-- [ ] Emit `assumption` events on explicit "Assuming..." statements in agent output
-- [ ] Emit `correction` events on "Wait, actually..." / "Correction:..." patterns
-- [ ] Record `session_id` — use OpenClaw session ID as canonical
-- [ ] End-to-end test: run codi on a simple task, verify events in txtai
+- [ ] Locate codi's tool wrapper (find sessions_spawn, read, write, exec calls)
+- [ ] Add `AILoggerClient` import and context to each tool call
+- [ ] Emit `delegation` event on every `sessions_spawn`
+- [ ] Emit `tool_call` event on every tool invocation
+- [ ] Parse agent output for `assumption` events ("Assuming...")
+- [ ] Parse agent output for `correction` events ("Wait, actually...", "Correction:...")
+- [ ] End-to-end: run codi on known task, verify events appear in `aidrift scan`
 
 ### P6.2 reviewer Integration
 
-- [ ] Same as P6.1 but for reviewer agent
-- [ ] reviewer is assumption-heavy — prioritise `assumption` and `correction` events
-- [ ] Verify reviewer audit trail shows clear decision chain
+- [ ] Same pattern as codi, prioritising `assumption` and `correction`
+- [ ] Verify audit trail shows clear decision chain
 
-### P6.3 g3 Integration
+### P6.3 Golden Session Tests
 
-- [ ] Instrument g3 Rust agent to emit events (via sidecar Python wrapper or direct JSON-RPC)
-- [ ] Align `g3` agent IDs with AIE `agent_id` field
-- [ ] Test with a real g3 task
-
-### P6.4 Golden Session Tests
-
-- [ ] Store anonymised real session logs as fixtures in `tests/fixtures/sessions/`
+- [ ] `tests/fixtures/sessions/` — store anonymised real session logs
 - [ ] `tests/test_golden_sessions.py`:
   - Load fixture
-  - Run full pipeline: ingest → index → oracle evaluate → drift scan → audit trail
-  - Assert: no unexpected drift flags, oracle pass/fail counts match expected, audit trail complete
+  - Run full pipeline: index → oracle evaluate → drift scan → audit trail
+  - Assert: expected drift count, expected oracle pass/fail, trail completeness
+
+### P6.4 Phase 6 — Verification
+
+- [ ] `aidrift scan --all` returns events from live codi session
+- [ ] Events appear in `aiaudit trail <session_id>`
+- [ ] No events dropped, no crashes
+
+---
+
+## Phase 7 — Advanced Drift (v2)
+
+### P7.1 NLI Second-Pass
+
+- [ ] Install `cross-encoder/nli-deberta-v3-small`
+- [ ] `ImplicitDriftDetector.check(statement1, statement2) -> str`
+  - Returns: "contradiction" | "entailment" | "neutral"
+- [ ] Update `DriftDetector` to run NLI on `semantic` contradictions (0.85–0.95 similarity)
+- [ ] If NLI says "contradiction" → upgrade to `implicit` drift with higher severity
+
+### P7.2 Context Fidelity Scoring
+
+- [ ] `compute_context_fidelity(delegation_event, downstream_events) -> float`
+  - Track how many times delegation's context_summary is referenced in downstream events
+  - Return 0.0–1.0 score
+- [ ] Add as oracle condition: `context_fidelity < 0.3` → critical
+
+### P7.3 Cascade Impact Analysis
+
+- [ ] `trace_cascade(drift_event, all_events) -> list[dict]`
+  - Find all events that used the invalidated assumption
+  - Return affected events with severity assessment
+
+### P7.4 Phase 7 — Verification
+
+- [ ] NLI model loads and runs on CPU in <100ms per pair
+- [ ] `implicit` drift type correctly assigned when NLI confirms contradiction
+- [ ] Context fidelity score computed and stored on delegation events
 
 ---
 
@@ -389,10 +343,9 @@ All must pass. No skips. No xfails.
 
 | # | Question | Blocking |
 |---|---|---|
-| 1 | Alert channel — `#evaluator-alerts` (new Discord channel) or DM to Sean? | Phase 5 |
-| 2 | g3 instrument now or after uncommitted changes resolved? | Phase 6 |
-| 3 | `implicit` contradiction (NLI) in v1 or v2? | Phase 2 |
-| 4 | AIE logs in git-ignored `data/` dir or tracked? | Phase 1 |
+| 1 | Alert channel — `#evaluator-alerts` (new Discord channel) or DM? | Phase 5 |
+| 2 | Do we instrument g3 despite uncommitted changes? | Phase 6 |
+| 3 | AIE logs in git-ignored data/ dir? | All phases |
 
 ---
 
@@ -407,4 +360,4 @@ All phases complete when:
 5. `aieval oracle list` lists all loaded oracles
 6. `aiaudit trail <session_id>` produces a valid audit trail
 7. `openclaw flow trigger aie_heartbeat` runs without error
-8. Real agent events from codi flow into AIE and appear in txtai query results
+8. Real agent events from codi flow into AIE and appear in `aidrift scan`
