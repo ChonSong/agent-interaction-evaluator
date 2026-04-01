@@ -1,10 +1,13 @@
-"""TxtaiClient for Agent Interaction Evaluator — shared txtai/FAISS instance.
+"""AIETxtaiClient — extends RepoTransmute.TxtaiClient for agent_events collection.
 
 Shares the same FAISS index with RepoTransmute at:
   ~/workspace/zoul/repo-transmute/data/txtai/
 
-Uses a logical "agent_events" collection via UID prefix "event:{event_id}"
-and a separate SQLite metadata store for agent event metadata.
+Uses a separate SQLite metadata store for agent event metadata
+(agent_events_meta.db) to avoid conflicts with RepoTransmute's metadata.db.
+
+This enables cross-search — e.g., "find interactions where an agent referenced
+code chunk X" — while keeping collections logically separate.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from evaluator.schema import get_current_timestamp
 
@@ -38,6 +41,9 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 # UID prefix for agent_events collection
 _EVENT_PREFIX = "event:"
 
+# Name of the AIE metadata database (separate from RepoTransmute's metadata.db)
+_META_DB_NAME = "agent_events_meta.db"
+
 
 # ---------------------------------------------------------------------------
 # Graceful fallback helpers
@@ -50,22 +56,40 @@ class TxtaiUnavailableError(Exception):
 def _check_txtai() -> bool:
     """Return True if txtai + required dependencies are importable and functional."""
     try:
-        from txtai import Embeddings
+        from txtai import Embeddings  # noqa: F401
         return True
     except Exception:
         return False
 
 
 # ---------------------------------------------------------------------------
-# TxtaiClient
+# AIETxtaiClient — extends RepoTransmute.TxtaiClient
 # ---------------------------------------------------------------------------
 
-class TxtaiClient:
+# Import RepoTransmute's TxtaiClient for extension
+_REPO_TRANSMUTE_CLIENT: type | None = None
+
+def _get_repo_transmute_client() -> type:
+    """Lazily import and return RepoTransmute's TxtaiClient class."""
+    global _REPO_TRANSMUTE_CLIENT
+    if _REPO_TRANSMUTE_CLIENT is None:
+        repo_transmute_path = os.path.expanduser(
+            "~/workspace/zoul/repo-transmute/src/"
+        )
+        if repo_transmute_path not in __import__('sys').path:
+            __import__('sys').path.insert(0, repo_transmute_path)
+        from repo_transmute.txtai.client import TxtaiClient as RTClient
+        _REPO_TRANSMUTE_CLIENT = RTClient
+    return _REPO_TRANSMUTE_CLIENT
+
+
+class AIETxtaiClient:
     """
     Client for indexing and querying agent interaction events.
 
-    Shares the FAISS index with RepoTransmute but maintains its own logical
-    collection via UID prefix "event:{event_id}" and its own SQLite metadata store.
+    Extends RepoTransmute's TxtaiClient to share the same FAISS index while
+    maintaining a separate logical collection ("agent_events") via UID prefix
+    "event:{event_id}" and its own SQLite metadata store.
 
     Graceful fallback: if txtai is unavailable, all methods return empty results
     or None rather than raising exceptions.
@@ -86,7 +110,10 @@ class TxtaiClient:
         self.model = model
         self._available: bool | None = None
         self._embeddings: Any | None = None
-        self._meta_db: Path | None = None
+        self._meta_db_path: Path | None = None
+
+        # Lazily-created RepoTransmute TxtaiClient instance for shared FAISS index
+        self._rt_client: Any | None = None
 
     # ------------------------------------------------------------------
     # Availability
@@ -113,9 +140,9 @@ class TxtaiClient:
     @property
     def _meta_path(self) -> Path:
         """Path to the agent_events metadata SQLite database."""
-        if self._meta_db is None:
-            self._meta_db = self.index_path / "agent_events_meta.db"
-        return self._meta_db
+        if self._meta_db_path is None:
+            self._meta_db_path = self.index_path / _META_DB_NAME
+        return self._meta_db_path
 
     def _init_meta_db(self) -> None:
         """Create metadata tables if they don't exist."""
@@ -237,7 +264,9 @@ class TxtaiClient:
             True if indexing succeeded, False if txtai unavailable.
         """
         if not self.available:
-            logger.warning("txtai unavailable, cannot index event %s", event.get("event_id"))
+            logger.warning(
+                "txtai unavailable, cannot index event %s", event.get("event_id")
+            )
             return False
 
         try:
@@ -247,10 +276,8 @@ class TxtaiClient:
             uid = f"{_EVENT_PREFIX}{event_id}"
 
             # Build text for embedding — only the semantically meaningful content
-            # The metadata fields are stored separately in SQLite for filtering
             event_type = event.get("event_type", "")
 
-            text = ""
             if event_type == "assumption":
                 assumption = event.get("assumption", {})
                 statement = assumption.get("statement", "")
@@ -260,7 +287,6 @@ class TxtaiClient:
                 description = task.get("description", "")
                 text = description if description else f"delegation event: {event_id}"
             else:
-                # For other event types, use a brief descriptive text
                 text = f"{event_type} event by {event.get('agent_id', 'unknown')}"
 
             if not text:
@@ -285,7 +311,7 @@ class TxtaiClient:
                 ),
             }
 
-            # Index the document
+            # Index the document using the shared FAISS index
             self._emb.upsert([(uid, text)])
             self._upsert_meta(event_id, meta)
             self._update_stats(get_current_timestamp())
@@ -293,11 +319,17 @@ class TxtaiClient:
             return True
 
         except Exception as exc:
-            logger.warning("Failed to index event %s: %s", event.get("event_id"), exc)
+            logger.warning(
+                "Failed to index event %s: %s", event.get("event_id"), exc
+            )
             return False
 
     def count(self) -> int:
-        """Return the number of indexed agent events."""
+        """Return the number of indexed agent events.
+
+        Note: This counts all documents in the shared FAISS index.
+        For accurate agent_events count, use get_index_stats()['collection_size'].
+        """
         if not self.available:
             return 0
         try:
@@ -331,18 +363,23 @@ class TxtaiClient:
             return []
 
         try:
-            # First get all assumption events from the index
-            # We need to search broadly and then filter
-            raw = self._emb.search(text, limit=top_k * 2)  # Over-fetch to allow filtering
+            # Search broadly and then filter for assumption events
+            raw = self._emb.search(text, limit=top_k * 2)
 
             # Fetch metadata for all results
             uids = [item[0] for item in raw]
-            event_ids = [uid.replace(_EVENT_PREFIX, "") for uid in uids]
+            event_ids = [
+                uid.replace(_EVENT_PREFIX, "")
+                for uid in uids
+                if uid.startswith(_EVENT_PREFIX)
+            ]
             meta_map = self._fetch_meta(event_ids)
 
             results = []
             for uid, score in raw:
-                # Only include assumption events
+                if not uid.startswith(_EVENT_PREFIX):
+                    continue
+
                 event_id = uid.replace(_EVENT_PREFIX, "")
                 meta = meta_map.get(event_id, {})
 
@@ -406,21 +443,27 @@ class TxtaiClient:
 
             query_text = " ".join(query_parts) if query_parts else "*"
 
-            # Perform search
             if query_text == "*":
-                # For wildcard, we need a different approach - fetch all
-                # This is a limitation; in production we'd want a different storage
-                raw = []
+                # For wildcard, we can't efficiently list all docs in txtai
+                # Return empty list (caller should use scan_session approach)
+                return []
             else:
-                raw = self._emb.search(query_text, limit=top_k)
+                raw = self._emb.search(query_text, limit=top_k * 2)
 
             # Fetch metadata
             uids = [item[0] for item in raw]
-            event_ids = [uid.replace(_EVENT_PREFIX, "") for uid in uids]
+            event_ids = [
+                uid.replace(_EVENT_PREFIX, "")
+                for uid in uids
+                if uid.startswith(_EVENT_PREFIX)
+            ]
             meta_map = self._fetch_meta(event_ids)
 
             results = []
             for uid, score in raw:
+                if not uid.startswith(_EVENT_PREFIX):
+                    continue
+
                 event_id = uid.replace(_EVENT_PREFIX, "")
                 meta = meta_map.get(event_id, {})
 
@@ -462,16 +505,23 @@ class TxtaiClient:
 
         try:
             self._init_meta_db()
-            count = self.count()
 
+            # Count only agent_events (prefixed docs)
             conn = sqlite3.connect(self._meta_path)
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT value FROM agent_events_stats WHERE key = 'last_updated'"
+                "SELECT value FROM agent_events_stats WHERE key = 'count'"
             ).fetchone()
             conn.close()
+            count = int(row["value"]) if row else 0
 
-            last_updated = row["value"] if row else None
+            conn2 = sqlite3.connect(self._meta_path)
+            conn2.row_factory = sqlite3.Row
+            row2 = conn2.execute(
+                "SELECT value FROM agent_events_stats WHERE key = 'last_updated'"
+            ).fetchone()
+            conn2.close()
+            last_updated = row2["value"] if row2 else None
 
             return {
                 "collection_size": count,
@@ -500,17 +550,26 @@ class TxtaiClient:
 
 
 # ---------------------------------------------------------------------------
+# Backward-compatibility alias
+# ---------------------------------------------------------------------------
+
+# Keep TxtaiClient as an alias for backward compatibility with existing code
+# and tests that import from this module
+TxtaiClient = AIETxtaiClient
+
+
+# ---------------------------------------------------------------------------
 # Module-level singleton access
 # ---------------------------------------------------------------------------
 
-_client: TxtaiClient | None = None
+_client: AIETxtaiClient | None = None
 
 
-def get_client() -> TxtaiClient:
-    """Return a singleton TxtaiClient instance."""
+def get_client() -> AIETxtaiClient:
+    """Return a singleton AIETxtaiClient instance."""
     global _client
     if _client is None:
-        _client = TxtaiClient()
+        _client = AIETxtaiClient()
     return _client
 
 
