@@ -1,0 +1,21 @@
+oracle_id: "no_confidence_zero"
+name: "Assumption confidence must be greater than zero"
+description: |
+  An agent should never emit an assumption with confidence 0.0.
+  Zero confidence indicates the agent is uncertain and should
+  not be acting on that assumption without further verification.
+event_type: "assumption"
+trigger: "on_event"
+severity: "warning"
+conditions:
+  - type: "field_min_value"
+    field: "assumption.confidence"
+    value: { "gt": 0.0 }
+actions:
+  - type: "flag"
+    output: "drift_event"
+metadata:
+  author: "zoul"
+  created: "2026-04-01"
+  tags: ["assumption", "confidence", "reliability"]
+  philosophy_ref: "Pillar-3"

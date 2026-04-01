@@ -37,10 +37,10 @@ dev = [
 ]
 
 [project.scripts]
-ailogger = "evaluator.logger:main"
-aidrift = "evaluator.drift:main"
-aieval = "evaluator.evaluato_cli:main"
-aiaudit = "evaluator.audit_cli:main"
+ailogger = "src.evaluator.logger:main"
+aidrift = "src.evaluator.drift:main"
+aieval = "src.evaluator.evaluator_cli:main"
+aiaudit = "src.evaluator.audit_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/evaluator"]

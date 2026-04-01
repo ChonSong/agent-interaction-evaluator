@@ -1,0 +1,29 @@
+oracle_id: "no_empty_context"
+name: "Delegation must include context summary"
+description: |
+  When an agent delegates a task, the context_summary field
+  must not be empty. Empty context is a leading indicator of
+  context bankruptcy (Philosophy §V).
+event_type: "delegation"
+trigger: "on_event"
+severity: "critical"
+conditions:
+  - type: "field_required"
+    field: "task.context_summary"
+    value: { "not_empty": true }
+  - type: "field_min_length"
+    field: "task.context_summary"
+    value: { "min_length": 20 }
+actions:
+  - type: "flag"
+    output: "drift_event"
+  - type: "alert"
+    output: "discord"
+    channel: "evaluator-alerts"
+  - type: "halt"
+    condition: "context_fidelity < 0.3"
+metadata:
+  author: "zoul"
+  created: "2026-04-01"
+  tags: ["context", "delegation", "reliability"]
+  philosophy_ref: "Pillar-3"
