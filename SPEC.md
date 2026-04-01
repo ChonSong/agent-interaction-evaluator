@@ -2,7 +2,7 @@
 
 > **Purpose:** Structured observability for multi-agent ecosystems. Reduce errors, surface assumption drift, produce auditable decision trails. Built on the principles in `agentic-workflow-philosophy.md`.
 >
-> **Status:** Draft — awaiting approval to begin implementation.
+> **Status:** Draft — implementation in progress (Phase 1).
 
 ---
 
@@ -47,7 +47,7 @@ From `agentic-workflow-philosophy.md`:
 ┌──────────────────────────────────────────────────────────────┐
 │                 Agent Interaction Logger (AIL)               │
 │  - Event validator (JSON schema)                             │
-│  - Event router (persist + forward)                          │
+│  - Event router (persist + forward)                           │
 │  - Backpressure handling                                      │
 └─────────────────────────┬────────────────────────────────────┘
                           │
@@ -62,16 +62,16 @@ From `agentic-workflow-philosophy.md`:
                                       ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                    Oracle Engine                              │
-│  - YAML oracle registry (loaded at startup)                  │
+│  - YAML oracle registry (loaded at startup)                   │
 │  - Per-event-type evaluation rules                           │
 │  - Scoring + deviation flags                                 │
 └─────────────────────────┬────────────────────────────────────┘
                           │
               ┌───────────┼───────────┬──────────────┐
               ▼           ▼           ▼              ▼
-         Audit Trail   Drift Flag  Alert/Halt    Dashboard
-         (JSONL/HTML)  (flagged    (Circuit       (future)
-                        event)       Breaker gate)
+         Audit Trail   Drift Flag  Alert/Halt    ClawFlow
+         (JSONL/HTML)  (flagged    (Circuit       Orchestration
+                        event)       Breaker gate)  (aie_heartbeat)
 ```
 
 ### Shared Infrastructure with RepoTransmute
@@ -96,14 +96,14 @@ All events are JSON. Every event has a **base schema**; each **event type** exte
 {
   "schema_version": "1.0",
   "event_id": "uuid-v4",
-  "event_type": "string",          // see §3.2
+  "event_type": "string",
   "timestamp": "ISO-8601",
-  "agent_id": "string",             // "codi", "reviewer", "human:sean", etc.
-  "session_id": "string",          // correlates events across a single session
+  "agent_id": "string",
+  "session_id": "string",
   "interaction_context": {
-    "channel": "string",           // "discord", "terminal", "api", etc.
-    "workspace_path": "string",    // relevant workspace directory if any
-    "parent_event_id": "string|null", // links to triggering event
+    "channel": "string",
+    "workspace_path": "string|null",
+    "parent_event_id": "string|null"
   }
 }
 ```
@@ -118,23 +118,23 @@ Emitted when one agent (or human) delegates a task to another.
   "event_type": "delegation",
   "delegator": {
     "agent_id": "string",
-    "role": "string"               // "orchestrator", "manager", "human"
+    "role": "string"
   },
   "delegate": {
     "agent_id": "string",
-    "role": "string"               // "worker", "specialist", "reviewer"
+    "role": "string"
   },
   "task": {
     "task_id": "uuid",
     "description": "string",
-    "intent": "string",            // why this task exists
-    "constraints": ["string"],     // explicit constraints given
-    "context_summary": "string",   // compressed context provided
-    "context_fidelity": 0.0,       // 0.0–1.0: estimated fidelity of context compression
+    "intent": "string",
+    "constraints": ["string"],
+    "context_summary": "string",
+    "context_fidelity": 0.0,
     "max_turns": "integer|null",
     "deadline": "ISO-8601|null"
   },
-  "oracle_ref": "string|null"      // links to oracle ID if task has predefined criteria
+  "oracle_ref": "string|null"
 }
 ```
 
@@ -146,12 +146,12 @@ Emitted when an agent invokes a tool.
   "event_type": "tool_call",
   "tool": {
     "name": "string",
-    "namespace": "string",         // "exec", "read", "write", "sessions_spawn", etc.
-    "arguments": "object",         // sanitised — no secrets
-    "argument_schema": "string"    // JSON schema ref if available
+    "namespace": "string",
+    "arguments": "object",
+    "argument_schema": "string|null"
   },
   "trigger": {
-    "type": "string",              // "explicit_request", "implicit_reasoning", "recovery"
+    "type": "string",
     "triggered_by_event_id": "string|null"
   },
   "outcome": {
@@ -170,12 +170,12 @@ Emitted when an agent states an assumption (explicit belief about state).
 {
   "event_type": "assumption",
   "assumption": {
-    "statement": "string",          // the assumption in natural language
-    "category": "string",           // "context", "capability", "environment", "precondition"
-    "confidence": 0.0,              // 0.0–1.0 self-reported confidence
-    "grounded_in": "string|null"   // what the assumption is based on
+    "statement": "string",
+    "category": "string",
+    "confidence": 0.0,
+    "grounded_in": "string|null"
   },
-  "derived_from": ["event_id"],    // prior events that informed this assumption
+  "derived_from": ["event_id"],
   "oracle_ref": "string|null"
 }
 ```
@@ -188,7 +188,7 @@ Emitted when an agent revises a prior assumption or action.
   "event_type": "correction",
   "prior_event_id": "event_id",
   "correction": {
-    "reason": "string",             // why the correction was made
+    "reason": "string",
     "prior_statement": "string",
     "revised_statement": "string",
     "severity": "minor|moderate|critical"
@@ -215,7 +215,7 @@ Emitted internally when the drift detector flags a contradiction.
     "statement": "string"
   },
   "contradiction_type": "direct|semantic|implicit",
-  "drift_score": 0.0,              // 0.0–1.0: severity of contradiction
+  "drift_score": 0.0,
   "action_taken": "flagged|halted|alerted"
 }
 ```
@@ -228,13 +228,13 @@ Emitted when a Circuit Breaker gate halts an action.
   "event_type": "circuit_breaker",
   "gate": {
     "name": "string",
-    "threshold": "string",         // the condition that triggered
+    "threshold": "string",
     "assumptions_violated": ["event_id"]
   },
   "action_blocked": "string|null",
   "halt_session": "boolean",
   "alert_sent": "boolean",
-  "audit_ref": "string"            // links to full audit trail entry
+  "audit_ref": "string"
 }
 ```
 
@@ -246,10 +246,10 @@ Emitted when a human provides input that affects agent behaviour.
   "event_type": "human_input",
   "human": {
     "id": "string",
-    "role": "string"               // "reviewer", "approver", "stakeholder"
+    "role": "string"
   },
   "input": {
-    "type": "string",              // "approval", "correction", "context", "rejection"
+    "type": "string",
     "content": "string",
     "context_summary": "string"
   },
@@ -270,36 +270,33 @@ Oracles are YAML files. Each oracle defines what "correct" looks like for a give
 
 ```
 evaluator/oracles/
-  ├── _registry.yaml          # index of all oracles
+  ├── _registry.yaml
   ├── delegation/
   │   ├── no_empty_context.yaml
-  │   ├── context_fidelity_threshold.yaml
-  │   └── deadline_propagation.yaml
+  │   └── context_fidelity_threshold.yaml
   ├── assumption/
   │   ├── no_confidence_zero.yaml
-  │   ├── groundedness_required.yaml
-  │   └── semantic_contradiction_check.yaml
+  │   └── groundedness_required.yaml
   ├── tool_call/
   │   ├── no_secret_exposure.yaml
   │   ├── schema_compliance.yaml
   │   └── error_recovery_rate.yaml
   └── circuit_breaker/
-      ├── halt_on_critical_drift.yaml
-      └── alert_on_cascade_risk.yaml
+      └── halt_on_critical_drift.yaml
 ```
 
 ### 4.2 Oracle Schema
 
 ```yaml
-oracle_id: "no_empty_context"          # globally unique
+oracle_id: "no_empty_context"
 name: "Delegation must include context summary"
 description: |
   When an agent delegates a task, the context_summary field
   must not be empty. Empty context is a leading indicator of
   context bankruptcy (Philosophy §V).
 event_type: "delegation"
-trigger: "on_event"                    # or "on_demand", "on_cron"
-severity: "critical"                   # critical | warning | info
+trigger: "on_event"
+severity: "critical"
 conditions:
   - type: "field_required"
     field: "task.context_summary"
@@ -319,7 +316,7 @@ metadata:
   author: "sean"
   created: "2026-04-01"
   tags: ["context", "delegation", "reliability"]
-  philosophy_ref: "Pillar-3"          # links to philosophy document
+  philosophy_ref: "Pillar-3"
 ```
 
 ### 4.3 Oracle Evaluation Engine
@@ -339,13 +336,11 @@ The engine:
 
 ### 5.1 `ailogger` — Agent Interaction Logger
 
-**Responsibility:** Receive, validate, route events.
-
 ```
 ailogger [command]
 
 Commands:
-  serve        Run the logger as a local IPC server (Unix socket or TCP)
+  serve        Run the logger as a local IPC server (Unix socket)
   emit         Emit a single event (for testing / human input)
   replay       Replay events from a JSONL log file
   status       Show logger health and event counts
@@ -359,14 +354,12 @@ Commands:
 
 ### 5.2 `aidrift` — Drift Detector
 
-**Responsibility:** Detect assumption contradictions across indexed history.
-
 ```
 aidrift [command]
 
 Commands:
   check <event_id>    Check a specific assumption event for drift
-  scan [--session S]   Scan all sessions for drift since last check
+  scan [--session S]  Scan all sessions for drift since last check
   report              Generate drift summary report
   stats               Show drift statistics
 ```
@@ -374,17 +367,13 @@ Commands:
 **Drift Algorithm:**
 1. On each `assumption` event, embed `assumption.statement` using the txtai model
 2. Query the `agent_events` collection for prior assumptions with cosine similarity > 0.85
-3. If a prior assumption contradicts the current one (checked via lightweight NLI or semantic similarity threshold), flag as `drift_detected`
+3. If a prior assumption contradicts the current one, flag as `drift_detected`
 4. `contradiction_type`:
-   - `direct` — same statement, different conclusion
-   - `semantic` — similar text, different meaning (txtai similarity 0.85–0.95)
-   - `implicit` — different statements, logically incompatible (NLI model)
-
-**Note:** `implicit` contradiction detection requires an NLI model (e.g. `cross-encoder/nli-deberta-v3-small`). This is a future enhancement; v1 uses `direct` and `semantic` only.
+   - `direct` — similar text, different conclusion (similarity ≥ 0.95)
+   - `semantic` — different text, same meaning (similarity 0.85–0.95)
+   - `implicit` — logically incompatible (NLI model, v2)
 
 ### 5.3 `aieval` — Oracle Evaluator
-
-**Responsibility:** Evaluate events against oracle rules.
 
 ```
 aieval [command]
@@ -405,8 +394,6 @@ Commands:
 
 ### 5.4 `aiaudit` — Audit Trail Exporter
 
-**Responsibility:** Produce human-readable and machine-parseable audit trails.
-
 ```
 aiaudit [command]
 
@@ -418,68 +405,27 @@ Commands:
   prune --before <date>    Archive and delete old trails
 ```
 
-**Audit trail format per session:**
-
-```json
-{
-  "audit_id": "uuid",
-  "session_id": "string",
-  "span": { "start": "ISO-8601", "end": "ISO-8601" },
-  "agents": ["agent_id"],
-  "decision_chain": [
-    {
-      "event_id": "uuid",
-      "event_type": "string",
-      "timestamp": "ISO-8601",
-      "agent_id": "string",
-      "description": "string",
-      "assumptions_used": ["event_id"],
-      "oracles_applied": ["oracle_id"],
-      "oracle_results": [
-        { "oracle_id": "string", "passed": "boolean", "deviation": "string|null" }
-      ],
-      "drift_flags": ["event_id"],
-      "consequential": "boolean",
-      "human_in_loop": "boolean"
-    }
-  ],
-  "summary": {
-    "total_events": "integer",
-    "drift_events": "integer",
-    "circuit_breaker_halts": "integer",
-    "human_interventions": "integer"
-  }
-}
-```
-
 ---
 
 ## 6. Data Storage
 
 ### 6.1 txtai Collections
 
-| Collection | Purpose | Schema |
-|---|---|---|
-| `blueprints` | RepoTransmute code blueprints | existing |
-| `agent_events` | All AIE interaction events | see §3 |
+| Collection | Purpose |
+|---|---|
+| `blueprints` | RepoTransmute code blueprints |
+| `agent_events` | All AIE interaction events |
 
 **`agent_events` index fields:**
 ```
-- event_id (primary key)
-- event_type (filter + search)
-- agent_id (filter)
-- session_id (filter)
-- timestamp (sort + filter)
-- assumption_statement (full-text search for drift)
-- task_description (full-text search)
-- oracles_triggered (filter)
-- severity (filter)
-- drift_score (sort)
+event_id (primary key), event_type, agent_id, session_id, timestamp,
+assumption_statement (full-text search for drift), task_description,
+oracles_triggered, severity, drift_score
 ```
 
 ### 6.2 SQLite Sidecar
 
-AIE maintains a SQLite database at `evaluator/data/aie_meta.db` for relational metadata that txtai is not suited for:
+AIE maintains a SQLite database at `evaluator/data/aie_meta.db`:
 
 ```sql
 CREATE TABLE sessions (
@@ -499,8 +445,7 @@ CREATE TABLE oracle_results (
   oracle_id TEXT,
   passed BOOLEAN,
   deviation TEXT,
-  evaluated_at TEXT,
-  FOREIGN KEY (event_id) REFERENCES events(event_id)
+  evaluated_at TEXT
 );
 
 CREATE TABLE drift_log (
@@ -510,40 +455,77 @@ CREATE TABLE drift_log (
   contradiction_type TEXT,
   drift_score REAL,
   action_taken TEXT,
-  resolved_at TEXT,
-  FOREIGN KEY (current_event_id) REFERENCES events(event_id),
-  FOREIGN KEY (contradicted_event_id) REFERENCES events(event_id)
+  resolved_at TEXT
 );
 ```
 
 ---
 
-## 7. Cron / Heartbeat Integration
+## 7. Autonomous Orchestration — ClawFlow
 
-### 7.1 Scheduled Jobs
+AIE uses **ClawFlow** for autonomous operation — not raw crontab. This follows the same methodology as RepoTransmute's autonomous task cascade.
 
-| Job | Schedule | What it does |
+### 7.1 Why ClawFlow
+
+| | Raw cron | ClawFlow |
 |---|---|---|
-| `drift_scan` | Every 6 hours | Scan all active sessions for unreported drift |
-| `oracle_batch` | Every 24 hours (02:00 AEST) | Run all `on_cron` oracles against recent events |
-| `audit_prune` | Weekly (Sunday 03:00 AEST) | Archive trails > 30 days, keep metadata |
-| `health_check` | Every 30 minutes | Verify logger alive, txtai reachable, no backpressure |
+| State between runs | None (stateless) | Persists — flow tracks what was done |
+| Failure handling | Exit code only | Flow state → resume from failure point |
+| Inspection | Logs only | `openclaw flow status aie_heartbeat` |
+| Multi-step coordination | Chain in shell | Native step→step with wait states |
+| Human intervention | Kill cron, fix, restart | `openclaw flow steer aie_heartbeat` |
 
-### 7.2 Heartbeat Checks
+### 7.2 The `aie_heartbeat` Flow
 
-During regular heartbeats, AIE checks:
-1. Logger socket reachable
-2. txtai index healthy
-3. Events in last 10 minutes vs expected rate
-4. Any unresolved critical drifts → alert
+```
+Flow: "aie_heartbeat"
+Owner: zoul main session
 
-### 7.3 Alert Outputs
+Step 1: aidrift scan --all-sessions
+  → If critical drift found → emit alert → halt → notify
+  → If minor drift → flag → continue
+
+Step 2: aieval oracle batch --since 24h
+  → If critical oracle failure → circuit_breaker → alert
+  → If warnings → log
+
+Step 3: aiaudit trail --sessions-with-drift
+  → Write audit trail to data/audit_trails/
+
+Step 4: health_check
+  → ailogger alive? txtai reachable? backpressure clear?
+
+Set flow waiting (30 min)
+Resume → repeat
+```
+
+### 7.3 Cron Trigger (minimal)
+
+A lightweight cron entry wakes the ClawFlow if it is idle:
+
+```bash
+# Entry point — lightweight, just wakes the flow
+0 * * * * openclaw flow trigger aie_heartbeat --if-idle
+```
+
+The actual work happens inside the Flow — it persists across cron invocations, tracks state, and can be inspected/resumed.
+
+### 7.4 Alert Routing
 
 | Severity | Action |
 |---|---|
-| `critical` | Discord alert to `#evaluator-alerts`, halt session if applicable |
+| `critical` | Discord alert to `#evaluator-alerts`, halt session |
 | `warning` | Discord alert, logged to drift_log |
-| `info` | Logged only, surfaced in next report |
+| `info` | Logged only |
+
+### 7.5 Scheduled Jobs
+
+| Job | Schedule (AEST) | What it does |
+|---|---|---|
+| `drift_scan` | Every 6 hours (via ClawFlow) | Scan all active sessions for unreported drift |
+| `oracle_batch` | Every 24h 02:00 (via ClawFlow) | Run all `on_cron` oracles against recent events |
+| `audit_prune` | Weekly Sunday 03:00 (via ClawFlow) | Archive trails > 30 days |
+| `health_check` | Every 30 min (via ClawFlow) | Verify logger alive, txtai reachable |
 
 ---
 
@@ -554,22 +536,18 @@ During regular heartbeats, AIE checks:
 Agents do **not** need to be modified directly. AIE provides two integration paths:
 
 **Option A — IPC (preferred):**
-```
-# Agent calls:
-nc -U /tmp/ailogger.sock < event.jsonl
-
-# Or via a thin Python client:
+```python
 from evaluator.logger_client import AILoggerClient
 client = AILoggerClient(socket_path="/tmp/ailogger.sock")
 client.emit(event_dict)
 ```
 
 **Option B — File drop:**
-Agents write JSONL to `evaluator/inbox/`. The logger watches the directory and ingests.
+Agents write JSONL to `evaluator/data/inbox/`. The logger watches the directory and ingests.
 
 ### 8.2 OpenClaw Agent Integration
 
-OpenClaw agents can emit events via a thin wrapper in the workspace. A logger subprocess is started alongside the agent ecosystem, and OpenClaw's session logging is extended to emit structured events.
+OpenClaw agents emit events via a thin wrapper. A logger subprocess runs alongside the agent ecosystem.
 
 **Mapping OpenClaw session events → AIE events:**
 - `delegation` = spawning a subagent or handing off to another agent
@@ -578,7 +556,7 @@ OpenClaw agents can emit events via a thin wrapper in the workspace. A logger su
 - `correction` = "Wait, actually...", "Correction:..." in agent output
 - `human_input` = heartbeat responses, approvals, corrections from humans
 
-### 8.3 Sean's Agents — Priority Integration Order
+### 8.3 Priority Integration Order
 
 | Agent | Priority | Reason |
 |---|---|---|
@@ -586,7 +564,6 @@ OpenClaw agents can emit events via a thin wrapper in the workspace. A logger su
 | `reviewer` | 2 | Assumption-heavy, clear oracle opportunities |
 | `g3` | 3 | Rust agent with uncommitted changes, high complexity |
 | `journal` | 4 | Regular structured output, good test case |
-| `others` | 5 | As needed |
 
 ---
 
@@ -610,13 +587,7 @@ OpenClaw agents can emit events via a thin wrapper in the workspace. A logger su
 
 ### 9.2 CLI API
 
-All CLI commands listed in §5 are also available as direct executables:
-```
-ailogger serve
-aidrift scan --session <id>
-aieval oracle list
-aiaudit trail <session_id>
-```
+All CLI commands listed in §5.
 
 ### 9.3 REST API (future)
 
@@ -636,43 +607,46 @@ GET  /report?since=&format=html
 ## 10. Directory Structure
 
 ```
-workspace/zoul/
-├── evaluator/
-│   ├── SPEC.md                        # this file
-│   ├── README.md                      # setup + quickstart
-│   ├── pyproject.toml
-│   ├── src/
-│   │   └── evaluator/
-│   │       ├── __init__.py
-│   │       ├── logger.py             # ailogger implementation
-│   │       ├── logger_client.py      # thin client for agents
-│   │       ├── drift.py              # aidrift implementation
-│   │       ├── evaluator.py          # aieval implementation
-│   │       ├── audit.py              # aiaudit implementation
-│   │       ├── oracle_engine.py      # oracle loading + evaluation
-│   │       ├── schema.py             # event schema + validation
-│   │       ├── txtai_client.py       # shared txtai/FAISS client
-│   │       ├── db.py                 # SQLite sidecar
-│   │       └── sanitiser.py          # removes secrets from events
-│   ├── oracles/                      # oracle definitions (YAML)
-│   │   ├── _registry.yaml
-│   │   └── [event_type]/
-│   ├── data/
-│   │   ├── aie_meta.db              # SQLite sidecar
-│   │   ├── logs/                    # raw JSONL event logs
-│   │   ├── audit_trails/           # generated audit trails
-│   │   └── inbox/                  # drop directory for agents
-│   ├── tests/
-│   │   ├── test_schema.py
-│   │   ├── test_oracle_engine.py
-│   │   ├── test_drift.py
-│   │   ├── test_logger.py
-│   │   └── fixtures/
-│   └── scripts/
-│       ├── cron_drift_scan.sh
-│       ├── cron_oracle_batch.sh
-│       └── cron_health_check.sh
-└── agent-interaction-evaluator/      # symlink or package install
+agent-interaction-evaluator/
+├── SPEC.md
+├── README.md
+├── REQUIREMENTS.md
+├── pyproject.toml
+├── src/
+│   └── evaluator/
+│       ├── __init__.py
+│       ├── logger.py             # ailogger implementation
+│       ├── logger_client.py      # thin client for agents
+│       ├── drift.py              # aidrift implementation
+│       ├── evaluator.py          # aieval implementation
+│       ├── audit.py              # aiaudit implementation
+│       ├── oracle_engine.py      # oracle loading + evaluation
+│       ├── schema.py              # event schema + validation
+│       ├── txtai_client.py        # shared txtai/FAISS client
+│       ├── db.py                  # SQLite sidecar
+│       ├── sanitiser.py           # removes secrets from events
+│       └── alerts.py              # Discord alert integration
+├── oracles/                      # oracle definitions (YAML)
+│   ├── _registry.yaml
+│   ├── delegation/
+│   ├── assumption/
+│   ├── tool_call/
+│   └── circuit_breaker/
+├── data/
+│   ├── aie_meta.db
+│   ├── logs/                    # raw JSONL event logs
+│   ├── audit_trails/            # generated audit trails
+│   └── inbox/                   # drop directory for agents
+├── tests/
+│   ├── test_schema.py
+│   ├── test_oracle_engine.py
+│   ├── test_drift.py
+│   ├── test_logger.py
+│   ├── test_txtai_client.py
+│   ├── test_audit.py
+│   └── fixtures/
+└── scripts/
+    └── cron_setup.sh           # installs crontab (minimal trigger only)
 ```
 
 ---
@@ -682,12 +656,13 @@ workspace/zoul/
 ```
 # Core
 python>=3.11
-txtai>=6.0.0                    # shared with RepoTransmute
-faiss-cpu                       # shared with RepoTransmute
-jsonschema                      # event validation
-pyyaml                          # oracle YAML parsing
+txtai>=6.0.0
+faiss-cpu
+jsonschema
+pyyaml
+aiosqlite
 
-# Optional (for implicit drift detection, v2)
+# Optional (implicit drift detection, v2)
 # cross-encoder/nli-deberta-v3-small
 
 # Testing
@@ -695,10 +670,8 @@ pytest>=8.0.0
 pytest-asyncio
 
 # Infrastructure
-aiosqlite                       # async SQLite
+openclaw (for ClawFlow)
 ```
-
-**No new external services required.** AIE runs entirely in the existing workspace infrastructure.
 
 ---
 
@@ -746,7 +719,7 @@ Real agent session logs (anononymised) stored as fixtures. Run full pipeline on 
 
 ## 13. Development Phases
 
-### Phase 1 — Foundation (autonomous-ready)
+### Phase 1 — Foundation
 - [ ] Project scaffold (`pyproject.toml`, dir structure)
 - [ ] Event schema (`schema.py`) with full JSON schema
 - [ ] Logger IPC server + client (`logger.py`, `logger_client.py`)
@@ -784,14 +757,14 @@ Real agent session logs (anononymised) stored as fixtures. Run full pipeline on 
 
 **Deliverable:** `aiaudit trail <session_id>` produces complete trail
 
-### Phase 5 — Cron + Alerts
-- [ ] Cron scripts (`scripts/`)
-- [ ] Discord alert integration (via OpenClaw message tool)
-- [ ] Health check script
-- [ ] Drift scan cron
+### Phase 5 — ClawFlow Orchestration + Alerts
+- [ ] ClawFlow `aie_heartbeat` flow definition
+- [ ] `cron_setup.sh` — minimal cron trigger (`openclaw flow trigger aie_heartbeat --if-idle`)
+- [ ] Discord alert integration (`alerts.py`)
+- [ ] Health check step in flow
 - [ ] Alert routing by severity
 
-**Deliverable:** Nightly drift scan runs, alerts delivered
+**Deliverable:** `openclaw flow trigger aie_heartbeat` runs full evaluation cycle
 
 ### Phase 6 — Agent Integration
 - [ ] codi integration (priority 1)
@@ -814,11 +787,14 @@ Real agent session logs (anononymised) stored as fixtures. Run full pipeline on 
 
 | # | Question | Decision needed from |
 |---|---|---|
-| 1 | Where does AIE live long-term — workspace subdir or own repo? | Sean |
-| 2 | Which channel for alerts — Discord `#evaluator-alerts` or Sean's DMs? | Sean |
-| 3 | Do we instrument `g3` despite uncommitted changes? | Sean |
-| 4 | Semantic drift (NLI model) — v1 or v2? | Alto/Sean |
-| 5 | Should AIE logs be git-ignored or tracked? | Alto |
+| 1 | Which channel for alerts — `#evaluator-alerts` or DMs? | Sean |
+| 2 | Do we instrument `g3` despite uncommitted changes? | Sean |
+| 3 | Semantic drift (NLI model) — v1 or v2? | Alto/Sean |
+| 4 | Should AIE logs be git-ignored or tracked? | Alto |
+
+**Resolved:**
+- Own repo ✅ (repo created: `ChonSong/agent-interaction-evaluator`)
+- Autonomous methodology ✅ (ClawFlow, not raw cron)
 
 ---
 
@@ -827,5 +803,7 @@ Real agent session logs (anononymised) stored as fixtures. Run full pipeline on 
 - `agentic-workflow-philosophy.md` — founding document
 - `repo-transmute/` — existing txtai/FAISS infrastructure
 - `TOOLS.md` §txtai — current txtai architecture
+- `clawflow/SKILL.md` — ClawFlow runtime substrate
+- `repo-transmute/adr-001-automatic-task-cascade.md` — autonomous methodology reference
 - Philosophy §V — the five failure modes AIE addresses
 - Philosophy §VI — the Circuit Breaker critique of paperclip
