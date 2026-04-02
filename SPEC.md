@@ -844,3 +844,25 @@ aiaudit prune --before <date>
 - `clawflow/SKILL.md` — ClawFlow runtime substrate
 - `HKUDS/ClawTeam` — swarm orchestration (complementary)
 - `cross-encoder/nli-deberta-v3-small` — NLI model for Phase 7
+
+---
+
+## 16. Simplification Sprint Results (2026-04-02)
+
+Post-Phase 5 simplification sprint completed these changes:
+
+### txtai Deduplication
+AIE `txtai_client.py` now extends RepoTransmute's `TxtaiClient`. Shared FAISS index at `~/workspace/zoul/repo-transmute/data/txtai/`, separate `agent_events` collection.
+
+### Tool Execution
+codi's `nanobot_tools.py` delegates to `claw-aie ToolExecutor` for bash, file_read, file_write, glob, grep. `openhands_events.py` in codi deleted (confirmed unused).
+
+### claw-aie Integration
+claw-aie is the canonical instrumented harness. codi delegates tool execution to it. All claw-aie tool calls emit AIE-compatible events via PreToolUse/PostToolUse hooks.
+
+### ClawTeam Sidecar
+Integration point identified: `FileTaskStore.update()` detects `owner` changes → emits AIE `delegation` events. Sidecar approach (no fork required).
+
+### Pending
+- `repo-transmute/evaluator/` pending deletion — verify AIE covers all use cases before removing
+- ClawTeam sidecar implementation
