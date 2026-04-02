@@ -2,7 +2,7 @@
 
 > **Purpose:** Structured observability for multi-agent ecosystems. Reduce errors, surface assumption drift, produce auditable decision trails. Built on the principles in `agentic-workflow-philosophy.md`.
 >
-> **Status:** Implementation in progress — Phases 1–2.
+> **Status:** Implementation in progress — Phases 1-3 autonomous (Phase 3 in progress)
 > **Last updated:** 2026-04-01
 
 ---
@@ -806,40 +806,41 @@ aiaudit prune --before <date>
 | Phase | Status | Deliverable |
 |---|---|---|
 | 1 — Foundation | ✅ Complete | ailogger serve + emit, schema, sanitiser, SQLite, 3 oracles |
-| 2 — txtai + Drift | 🔄 In Progress | AIETxtaiClient, aidrift scan, txtai indexing |
-| 3 — Oracle Engine | 📋 Planned | Full oracle registry, condition evaluators, aieval CLI |
+| 2 — txtai + Drift | ✅ Complete | AIETxtaiClient, aidrift scan, txtai indexing |
+| 3 — Oracle Engine | 🔄 Autonomous in progress | Full oracle registry, condition evaluators, aieval CLI |
 | 4 — Audit Trails | 📋 Planned | AuditGenerator, aiaudit trail/export/diff |
-| 5 — ClawFlow | 📋 Planned | aie_heartbeat flow, cron_setup.sh, alerts |
+| 5 — ClawFlow | 📋 Planned (after Phases 3–4) | aie_heartbeat flow, cron_setup.sh, alerts |
 | 6 — Agent Integration | 📋 Planned | codi → AIE event emission |
 | 7 — Advanced Drift | 📋 Planned | NLI second-pass, context fidelity, cascade tracing |
 
 ---
 
+
 ## 14. Open Questions
 
-| # | Question | Decision needed |
+| # | Question | Decision |
 |---|---|---|
-| 1 | Alert channel — `#evaluator-alerts` or DM to Sean? | Sean |
-| 2 | Do we instrument g3 despite uncommitted changes? | Sean |
 | 3 | Semantic drift NLI confirmation in v1 or v2? | v2 (Phase 7) |
-| 4 | AIE logs git-ignored? | Yes (data/ is gitignored) |
+| (1) | Alert channel | ✅ `#evaluator-alerts` |
+| (2) | g3 instrumentation | ✅ Include (revisit later) |
+| (4) | AIE logs git-ignored | ✅ data/ gitignored + docs/DATA-TRACKING.md |
 
 **Resolved:**
 - Own repo ✅ (github.com/ChonSong/agent-interaction-evaluator)
 - Autonomous methodology ✅ (ClawFlow, not raw cron)
 - txtai reuse ✅ (extend RepoTransmute pattern, share index)
 - Drift thresholds ✅ (≥0.95 direct, 0.85–0.95 semantic, NLI in v2)
-
----
+- Alert channel ✅ (`#evaluator-alerts`)
+- g3 integration ✅ (Phase 6, revisit later)
+- Data docs ✅ (docs/DATA-TRACKING.md)
 
 ## 15. References
 
 - `agentic-workflow-philosophy.md` — founding document
 - `repo-transmute/src/repo_transmute/txtai/client.py` — TxtaiClient pattern
-- `repo-transmute/src/repo_transmute/evaluator/drift_detector.py` — keyword-based drift detection (RepoTransmute's existing approach)
+- `repo-transmute/src/repo_transmute/evaluator/drift_detector.py` — keyword-based drift detection
 - `docs/PHASE2-RESEARCH.md` — research sprint findings
+- `docs/DATA-TRACKING.md` — data lifecycle documentation
 - `clawflow/SKILL.md` — ClawFlow runtime substrate
-- `HKUDS/ClawTeam` — swarm orchestration (complementary, not overlapping)
+- `HKUDS/ClawTeam` — swarm orchestration (complementary)
 - `cross-encoder/nli-deberta-v3-small` — NLI model for Phase 7
-- Philosophy §V — five failure modes
-- Philosophy §VI — Circuit Breaker critique
