@@ -2,7 +2,7 @@
 
 > **Purpose:** Structured observability for multi-agent ecosystems. Reduce errors, surface assumption drift, produce auditable decision trails. Built on the principles in `agentic-workflow-philosophy.md`.
 >
-> **Status:** Implementation in progress — Phases 1-3 autonomous (Phase 3 in progress)
+> **Status:** Implementation in progress — Phases 1-5 complete, 6-7 planned
 > **Last updated:** 2026-04-01
 
 ---
@@ -807,9 +807,9 @@ aiaudit prune --before <date>
 |---|---|---|
 | 1 — Foundation | ✅ Complete | ailogger serve + emit, schema, sanitiser, SQLite, 3 oracles |
 | 2 — txtai + Drift | ✅ Complete | AIETxtaiClient, aidrift scan, txtai indexing |
-| 3 — Oracle Engine | 🔄 Autonomous in progress | Full oracle registry, condition evaluators, aieval CLI |
-| 4 — Audit Trails | 📋 Planned | AuditGenerator, aiaudit trail/export/diff |
-| 5 — ClawFlow | 📋 Planned (after Phases 3–4) | aie_heartbeat flow, cron_setup.sh, alerts |
+| 3 — Oracle Engine | ✅ Complete | Full oracle registry, condition evaluators, aieval CLI |
+| 4 — Audit Trails | ✅ Complete | AuditGenerator, aiaudit trail/export/diff |
+| 5 — ClawFlow | ✅ Complete (installed, not yet running on cron) | aie_heartbeat flow, cron_setup.sh, alerts |
 | 6 — Agent Integration | 📋 Planned | codi → AIE event emission |
 | 7 — Advanced Drift | 📋 Planned | NLI second-pass, context fidelity, cascade tracing |
 
