@@ -591,7 +591,7 @@ Resume from Step 1.
 Minimal crontab entry — just wakes the flow:
 
 ```bash
-# Every hour: if flow is idle, trigger it
+# Every 6 hours: if flow is idle, trigger it
 0 * * * * openclaw flow trigger aie_heartbeat --if-idle >> evaluator/data/logs/cron_trigger.log 2>&1
 ```
 
