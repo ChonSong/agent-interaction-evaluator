@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -66,24 +65,14 @@ def _check_txtai() -> bool:
 # AIETxtaiClient — extends RepoTransmute.TxtaiClient
 # ---------------------------------------------------------------------------
 
-# Import RepoTransmute's TxtaiClient for extension
-_REPO_TRANSMUTE_CLIENT: type | None = None
-
-def _get_repo_transmute_client() -> type:
-    """Lazily import and return RepoTransmute's TxtaiClient class."""
-    global _REPO_TRANSMUTE_CLIENT
-    if _REPO_TRANSMUTE_CLIENT is None:
-        repo_transmute_path = os.path.expanduser(
-            "~/workspace/zoul/repo-transmute/src/"
-        )
-        if repo_transmute_path not in __import__('sys').path:
-            __import__('sys').path.insert(0, repo_transmute_path)
-        from repo_transmute.txtai.client import TxtaiClient as RTClient
-        _REPO_TRANSMUTE_CLIENT = RTClient
-    return _REPO_TRANSMUTE_CLIENT
+import sys as _sys
+_repo_transmute_path = os.path.expanduser("~/workspace/zoul/repo-transmute/src/")
+if _repo_transmute_path not in _sys.path:
+    _sys.path.insert(0, _repo_transmute_path)
+from repo_transmute.txtai.client import TxtaiClient as _BaseTxtaiClient
 
 
-class AIETxtaiClient:
+class AIETxtaiClient(_BaseTxtaiClient):
     """
     Client for indexing and querying agent interaction events.
 
@@ -94,6 +83,9 @@ class AIETxtaiClient:
     Graceful fallback: if txtai is unavailable, all methods return empty results
     or None rather than raising exceptions.
     """
+
+    # Override the base class metadata DB name
+    _META_DB = _META_DB_NAME
 
     def __init__(
         self,
@@ -106,14 +98,18 @@ class AIETxtaiClient:
                         RepoTransmute path via TXTAI_INDEX_PATH env var.
             model: Sentence-transformers model name.
         """
-        self.index_path = Path(index_path) if index_path else Path(DEFAULT_INDEX_PATH)
-        self.model = model
-        self._available: bool | None = None
-        self._embeddings: Any | None = None
-        self._meta_db_path: Path | None = None
+        # Base class uses index_dir; we accept index_path for backward compat
+        resolved_path = Path(index_path) if index_path else Path(DEFAULT_INDEX_PATH)
+        super().__init__(index_dir=resolved_path, model=model)
 
-        # Lazily-created RepoTransmute TxtaiClient instance for shared FAISS index
-        self._rt_client: Any | None = None
+        # Override index_dir with Path to match our property names
+        self.index_path: Path = resolved_path
+
+        # Track available state (base class doesn't have this)
+        self._available: bool | None = None
+
+        # Separate metadata DB path (base class uses _meta_path via property)
+        self._meta_db_path: Path | None = None
 
     # ------------------------------------------------------------------
     # Availability
@@ -134,7 +130,7 @@ class AIETxtaiClient:
             )
 
     # ------------------------------------------------------------------
-    # Internal: metadata DB
+    # Internal: override metadata DB path to use AIE's separate store
     # ------------------------------------------------------------------
 
     @property
@@ -143,6 +139,10 @@ class AIETxtaiClient:
         if self._meta_db_path is None:
             self._meta_db_path = self.index_path / _META_DB_NAME
         return self._meta_db_path
+
+    # ------------------------------------------------------------------
+    # Internal: metadata DB helpers
+    # ------------------------------------------------------------------
 
     def _init_meta_db(self) -> None:
         """Create metadata tables if they don't exist."""
@@ -207,30 +207,19 @@ class AIETxtaiClient:
         conn.close()
 
     # ------------------------------------------------------------------
-    # Lifecycle
+    # Lifecycle — delegate to base class embeddings (use base class property)
     # ------------------------------------------------------------------
-
-    @property
-    def _emb(self) -> Any:
-        """Lazily create the Embeddings instance on first access."""
-        if self._embeddings is None:
-            from txtai import Embeddings
-
-            self._embeddings = Embeddings({
-                "path": self.model,
-                "index-dir": str(self.index_path),
-            })
-        return self._embeddings
 
     def close(self) -> None:
         """Close the embeddings instance."""
+        # Base class uses self.embeddings; we use the same
         if self._embeddings is not None:
             self._embeddings.close()
             self._embeddings = None
 
     def save(self) -> None:
         """Persist the FAISS index to the index directory."""
-        self._emb.save(str(self.index_path))
+        self.embeddings.save(str(self.index_path))
 
     def load(self) -> None:
         """Reload a previously saved index."""
@@ -245,7 +234,7 @@ class AIETxtaiClient:
         self._embeddings.load(str(self.index_path))
 
     # ------------------------------------------------------------------
-    # Indexing
+    # Indexing — AIE-specific event schema
     # ------------------------------------------------------------------
 
     def index_event(self, event: dict) -> bool:
@@ -311,8 +300,8 @@ class AIETxtaiClient:
                 ),
             }
 
-            # Index the document using the shared FAISS index
-            self._emb.upsert([(uid, text)])
+            # Index the document using the shared FAISS index via base class embeddings
+            self.embeddings.upsert([(uid, text)])
             self._upsert_meta(event_id, meta)
             self._update_stats(get_current_timestamp())
 
@@ -333,7 +322,7 @@ class AIETxtaiClient:
         if not self.available:
             return 0
         try:
-            return self._emb.count()
+            return self.embeddings.count()
         except Exception:
             return 0
 
@@ -364,7 +353,7 @@ class AIETxtaiClient:
 
         try:
             # Search broadly and then filter for assumption events
-            raw = self._emb.search(text, limit=top_k * 2)
+            raw = self.embeddings.search(text, limit=top_k * 2)
 
             # Fetch metadata for all results
             uids = [item[0] for item in raw]
@@ -448,7 +437,7 @@ class AIETxtaiClient:
                 # Return empty list (caller should use scan_session approach)
                 return []
             else:
-                raw = self._emb.search(query_text, limit=top_k * 2)
+                raw = self.embeddings.search(query_text, limit=top_k * 2)
 
             # Fetch metadata
             uids = [item[0] for item in raw]
