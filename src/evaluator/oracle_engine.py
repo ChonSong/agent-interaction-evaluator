@@ -345,6 +345,18 @@ def apply_actions(oracle: Oracle, event: dict, result: ConditionResult) -> None:
             t.start()
         except Exception:
             pass
+        # Also increment circuit_breaker_halts counter in sessions table
+        try:
+            import threading as _t
+            def _inc_halt():
+                import asyncio
+                async def _do():
+                    from . import db as _db
+                    await _db.increment_halt_counter(event.get("session_id"))
+                asyncio.run(_do())
+            _t.Thread(target=_inc_halt, daemon=True).start()
+        except Exception:
+            pass
     if severity == "info":
         logger.warning("Oracle %s [%s] failed for event %s: %s", oracle.oracle_id, severity, event.get("event_id"), result.deviation)
 

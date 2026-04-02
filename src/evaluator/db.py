@@ -53,6 +53,15 @@ async def init_db(db_path: str | None = None) -> aiosqlite.Connection:
             evaluated_at       TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS circuit_breaker_events (
+            event_id           TEXT PRIMARY KEY,
+            event_type         TEXT,
+            session_id         TEXT,
+            oracle_id          TEXT,
+            halt_session       INTEGER,
+            alert_sent         INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS drift_log (
             drift_id                    TEXT PRIMARY KEY,
             current_event_id            TEXT,
@@ -70,6 +79,19 @@ async def init_db(db_path: str | None = None) -> aiosqlite.Connection:
 # ---------------------------------------------------------------------------
 # Session operations
 # ---------------------------------------------------------------------------
+
+
+async def increment_halt_counter(session_id: str, db_path: str | None = None) -> None:
+    """Increment the circuit_breaker_halts counter for a session."""
+    if not session_id:
+        return
+    path = db_path or DEFAULT_DB_PATH
+    async with aiosqlite.connect(path) as conn:
+        await conn.execute(
+            "UPDATE sessions SET circuit_breaker_halts = circuit_breaker_halts + 1 WHERE session_id = ?",
+            (session_id,),
+        )
+        await conn.commit()
 
 
 async def insert_session(session: dict, db_path: str | None = None) -> None:
