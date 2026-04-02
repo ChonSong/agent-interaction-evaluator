@@ -148,9 +148,9 @@ class TestDiff:
             ),
         )
         result = AuditGenerator(None).diff(trail_a, trail_b)
-        assert result["total_events"]["delta"] == 5
-        assert result["drift_events"]["delta"] == 2
-        assert result["circuit_breaker_halts"]["delta"] == 1
+        assert result.delta["total_events"] == 5
+        assert result.delta["drift_events"] == 2
+        assert result.delta["circuit_breaker_halts"] == 1
 
 
 class TestToJson:
