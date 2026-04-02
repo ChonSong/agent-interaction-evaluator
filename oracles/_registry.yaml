@@ -1,0 +1,53 @@
+# Oracle Registry — index of all AIE oracles
+# Auto-generated, do not edit manually
+registry_version: "1.0"
+updated: "2026-04-02"
+
+oracles:
+  - oracle_id: "no_empty_context"
+    event_type: "delegation"
+    trigger: "on_event"
+    severity: "critical"
+    path: "delegation/no_empty_context.yaml"
+
+  - oracle_id: "context_fidelity_threshold"
+    event_type: "delegation"
+    trigger: "on_event"
+    severity: "warning"
+    path: "delegation/context_fidelity_threshold.yaml"
+
+  - oracle_id: "no_confidence_zero"
+    event_type: "assumption"
+    trigger: "on_event"
+    severity: "warning"
+    path: "assumption/no_confidence_zero.yaml"
+
+  - oracle_id: "groundedness_required"
+    event_type: "assumption"
+    trigger: "on_event"
+    severity: "info"
+    path: "assumption/groundedness_required.yaml"
+
+  - oracle_id: "no_secret_exposure"
+    event_type: "tool_call"
+    trigger: "on_event"
+    severity: "critical"
+    path: "tool_call/no_secret_exposure.yaml"
+
+  - oracle_id: "schema_compliance"
+    event_type: "tool_call"
+    trigger: "on_event"
+    severity: "warning"
+    path: "tool_call/schema_compliance.yaml"
+
+  - oracle_id: "error_recovery_rate"
+    event_type: "tool_call"
+    trigger: "on_cron"
+    severity: "warning"
+    path: "tool_call/error_recovery_rate.yaml"
+
+  - oracle_id: "halt_on_critical_drift"
+    event_type: "drift_detected"
+    trigger: "on_event"
+    severity: "critical"
+    path: "circuit_breaker/halt_on_critical_drift.yaml"

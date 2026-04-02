@@ -1,0 +1,23 @@
+oracle_id: "context_fidelity_threshold"
+name: "Delegation context fidelity must be at least 0.5"
+description: |
+  When an agent delegates a task, the context_fidelity score must be
+  at least 0.5. Low context fidelity is a leading indicator of
+  context bankruptcy (Philosophy §V).
+event_type: "delegation"
+trigger: "on_event"
+severity: "warning"
+conditions:
+  - type: "field_gte"
+    field: "task.context_fidelity"
+    value: 0.5
+actions:
+  - type: "flag"
+    output: "drift_event"
+  - type: "log"
+    output: "info"
+metadata:
+  author: "aie-autonomous"
+  created: "2026-04-02"
+  tags: ["context", "delegation", "fidelity"]
+  philosophy_ref: "Pillar-3"

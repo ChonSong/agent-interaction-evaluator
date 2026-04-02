@@ -1,0 +1,20 @@
+oracle_id: "groundedness_required"
+name: "Assumption should be grounded in evidence"
+description: |
+  When an agent states an assumption, it should be grounded in
+  some evidence or prior context. Ungrounded assumptions are high-risk
+  for drift.
+event_type: "assumption"
+trigger: "on_event"
+severity: "info"
+conditions:
+  - type: "field_not_null"
+    field: "assumption.grounded_in"
+actions:
+  - type: "log"
+    output: "info"
+metadata:
+  author: "aie-autonomous"
+  created: "2026-04-02"
+  tags: ["assumption", "groundedness"]
+  philosophy_ref: "Pillar-3"

@@ -1,0 +1,26 @@
+oracle_id: "halt_on_critical_drift"
+name: "Halt on critical drift (score >= 0.9)"
+description: |
+  When drift_detected event has drift_score >= 0.9, this is a critical
+  assumption contradiction. The session should be halted immediately and
+  an alert sent. This is the Circuit Breaker pattern (Philosophy §VI).
+event_type: "drift_detected"
+trigger: "on_event"
+severity: "critical"
+conditions:
+  - type: "field_gte"
+    field: "drift_score"
+    value: 0.9
+actions:
+  - type: "halt"
+    output: "circuit_breaker"
+  - type: "alert"
+    output: "discord"
+    channel: "#evaluator-alerts"
+  - type: "log"
+    output: "critical"
+metadata:
+  author: "aie-autonomous"
+  created: "2026-04-02"
+  tags: ["drift", "circuit_breaker", "critical"]
+  philosophy_ref: "Pillar-6"

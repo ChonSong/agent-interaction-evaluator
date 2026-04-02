@@ -1,0 +1,24 @@
+oracle_id: "error_recovery_rate"
+name: "Session tool_call error rate should not exceed 20%"
+description: |
+  Aggregate oracle — evaluates on_cron. Scans the last 24h of tool_call events
+  per session and flags if the error rate exceeds 20%. High error rates
+  indicate systemic tool invocation problems.
+event_type: "tool_call"
+trigger: "on_cron"
+severity: "warning"
+conditions:
+  - type: "error_rate_threshold"
+    max_error_rate: 0.2
+    window_hours: 24
+actions:
+  - type: "flag"
+    output: "drift_event"
+  - type: "alert"
+    output: "discord"
+    channel: "#evaluator-alerts"
+metadata:
+  author: "aie-autonomous"
+  created: "2026-04-02"
+  tags: ["tool_call", "error", "reliability"]
+  philosophy_ref: "Pillar-5"

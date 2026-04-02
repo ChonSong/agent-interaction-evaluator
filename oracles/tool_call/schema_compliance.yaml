@@ -1,0 +1,25 @@
+oracle_id: "schema_compliance"
+name: "Tool arguments should conform to schema when provided"
+description: |
+  When a tool has an argument_schema defined, the tool arguments
+  should conform to that schema. Non-conforming arguments are a
+  leading indicator of tool call errors.
+event_type: "tool_call"
+trigger: "on_event"
+severity: "warning"
+conditions:
+  - type: "field_not_null"
+    field: "tool.argument_schema"
+  - type: "schema_compliance"
+    field: "tool.arguments"
+    schema_field: "tool.argument_schema"
+actions:
+  - type: "flag"
+    output: "drift_event"
+  - type: "log"
+    output: "info"
+metadata:
+  author: "aie-autonomous"
+  created: "2026-04-02"
+  tags: ["tool_call", "schema", "compliance"]
+  philosophy_ref: "Pillar-4"
