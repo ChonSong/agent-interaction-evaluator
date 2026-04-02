@@ -279,6 +279,22 @@ class AILogger:
             logger.warning("Drift check failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
+    # Oracle evaluation — Phase 3
+    # ------------------------------------------------------------------
+
+    def _evaluate_oracles(self, event: dict) -> None:
+        """
+        Evaluate an event against loaded oracles (Phase 3).
+
+        This is synchronous to avoid blocking the emit path.
+        """
+        try:
+            from . import oracle_engine as oe
+            oe.evaluate_event(event)
+        except Exception as exc:
+            logger.warning("Oracle evaluation failed (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
     # txtai indexing — Phase 2.2
     # ------------------------------------------------------------------
 
@@ -296,6 +312,9 @@ class AILogger:
 
             # Phase 2.2: check for drift (non-blocking, best-effort)
             self._check_and_alert_drift(event)
+
+            # Phase 3: evaluate against oracles (non-blocking, best-effort)
+            self._evaluate_oracles(event)
 
             if not self._txtai_available:
                 self._txtai_available = True
@@ -324,6 +343,8 @@ class AILogger:
                 client.index_event(event)
                 # Also check drift on replayed events
                 self._check_and_alert_drift(event)
+                # Also evaluate against oracles on replayed events
+                self._evaluate_oracles(event)
             except Exception as exc:
                 # Put it back at front of buffer and stop
                 logger.warning("txtai re-index failed, stopping replay: %s", exc)
