@@ -13,7 +13,7 @@ from evaluator.audit import (
     AuditSummary,
     AuditTrail,
     AuditGenerator,
-    diff,
+    AuditGenerator,
     to_json,
     to_markdown,
 )
@@ -147,7 +147,7 @@ class TestDiff:
                 oracles_passed=7, oracles_failed=3,
             ),
         )
-        result = diff(trail_a, trail_b)
+        result = AuditGenerator(None).diff(trail_a, trail_b)
         assert result["total_events"]["delta"] == 5
         assert result["drift_events"]["delta"] == 2
         assert result["circuit_breaker_halts"]["delta"] == 1

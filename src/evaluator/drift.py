@@ -290,20 +290,22 @@ async def _get_drift_stats() -> dict[str, Any]:
 
         await conn.close()
 
+
         # Get contradiction type breakdown for open drifts
-        async with db_mod.init_db(db_path) as conn2:
-            conn2.row_factory = aiosqlite.Row
-            type_breakdown = {}
-            async with conn2.execute(
-                """
-                SELECT contradiction_type, COUNT(*) as cnt
-                FROM drift_log WHERE resolved_at IS NULL
-                GROUP BY contradiction_type
-                """
-            ) as cur:
-                rows = await cur.fetchall()
-            for row in rows:
-                type_breakdown[row["contradiction_type"]] = row["cnt"]
+        conn2 = await db_mod.init_db(db_path)
+        conn2.row_factory = aiosqlite.Row
+        type_breakdown = {}
+        async with conn2.execute(
+            """
+            SELECT contradiction_type, COUNT(*) as cnt
+            FROM drift_log WHERE resolved_at IS NULL
+            GROUP BY contradiction_type
+            """
+        ) as cur:
+            rows = await cur.fetchall()
+        for row in rows:
+            type_breakdown[row["contradiction_type"]] = row["cnt"]
+        await conn2.close()
 
         return {
             "total_drifts": total_count,

@@ -1,0 +1,22 @@
+[Unit]
+Description=AILogger — Agent Interaction Evaluation IPC Logger
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo
+Environment="AILOGGER_SOCKET=/home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/evaluator/data/ailogger.sock"
+Environment="PYTHONPATH=/home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/src"
+ExecStart=/usr/bin/python3 -m evaluator.logger serve
+
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/evaluator/data
+
+[Install]
+WantedBy=default.target

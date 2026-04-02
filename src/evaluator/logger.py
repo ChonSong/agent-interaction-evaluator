@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import alerts
+from . import db as db_mod
+from . import drift
 from . import schema as schema_mod
 from . import sanitiser
 
@@ -215,18 +218,85 @@ class AILogger:
         except Exception as exc:
             logger.warning("Failed to update session in SQLite: %s", exc)
 
+    # ------------------------------------------------------------------
+    # Drift detection — Phase 2.2
+    # ------------------------------------------------------------------
+
+    def _check_and_alert_drift(self, event: dict) -> None:
+        """
+        Check an assumption event for drift against prior indexed assumptions.
+
+        If drift is found: logs to DB and sends Discord alert for critical drift.
+        This is synchronous to avoid blocking the emit path — drift detection
+        is best-effort and should never prevent event persistence.
+        """
+        try:
+            detector = drift.DriftDetector()
+            result = detector.check(event.get("event_id", ""), event)
+            if result is None:
+                return
+
+            # Log to SQLite drift_log
+            drift_entry = {
+                "drift_id": f"drift-{result.event_id}",
+                "current_event_id": result.event_id,
+                "contradicted_event_id": result.contradicted_event_id,
+                "contradiction_type": result.contradiction_type,
+                "drift_score": result.drift_score,
+                "action_taken": None,
+                "resolved_at": None,
+            }
+            # Run the async insert in a new event loop (synchronous context)
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in async context — create a task
+                loop.create_task(db_mod.insert_drift_log(drift_entry))
+            except RuntimeError:
+                # No running loop — create a new one
+                asyncio.run(db_mod.insert_drift_log(drift_entry))
+
+            logger.warning(
+                "DRIFT DETECTED: event=%s type=%s score=%.3f",
+                result.event_id,
+                result.contradiction_type,
+                result.drift_score,
+            )
+
+            # Alert on critical drift (score >= 0.9)
+            if result.drift_score >= 0.9:
+                msg = (
+                    f"🚨 CRITICAL DRIFT detected\n"
+                    f"Event: `{result.event_id}`\n"
+                    f"Type: {result.contradiction_type}\n"
+                    f"Score: {result.drift_score:.3f}\n"
+                    f"Current: {result.current_statement[:100]}\n"
+                    f"Prior: {result.prior_statement[:100]}"
+                )
+                alerts.send_alert(msg, severity="critical")
+
+        except Exception as exc:
+            logger.warning("Drift check failed (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # txtai indexing — Phase 2.2
+    # ------------------------------------------------------------------
+
     async def _index_event(self, event: dict) -> None:
         """
-        Attempt to index event in txtai (Phase 2 component).
+        Index event in txtai and check for drift (Phase 2.2).
 
-        If txtai is unavailable or txtai_client is not yet implemented,
-        the event is buffered for later replay — events are NEVER dropped.
+        Events are NEVER dropped due to indexing or drift check failures.
         """
         try:
             from . import txtai_client as tx
 
             client = tx.get_client()
-            await client.index_event(event)
+            client.index_event(event)
+
+            # Phase 2.2: check for drift (non-blocking, best-effort)
+            self._check_and_alert_drift(event)
+
             if not self._txtai_available:
                 self._txtai_available = True
                 logger.info("txtai connection restored, %d buffered events will be replayed", len(self._buffer))
@@ -251,7 +321,9 @@ class AILogger:
             try:
                 from . import txtai_client as tx
                 client = tx.get_client()
-                await client.index_event(event)
+                client.index_event(event)
+                # Also check drift on replayed events
+                self._check_and_alert_drift(event)
             except Exception as exc:
                 # Put it back at front of buffer and stop
                 logger.warning("txtai re-index failed, stopping replay: %s", exc)
@@ -269,7 +341,10 @@ async def handle_client(
     ailogger: AILogger,
 ) -> None:
     """Handle a single client connection."""
-    addr = writer.get_extra_info("sockname")
+    try:
+        addr = writer.get_extra_info("sockname")
+    except Exception:
+        addr = None
     logger.debug("Client connected: %s", addr)
 
     try:
