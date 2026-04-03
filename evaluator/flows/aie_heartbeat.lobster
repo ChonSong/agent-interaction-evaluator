@@ -9,7 +9,7 @@ steps:
     stdin: null
 
   - id: drift_check
-    run: python3 /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/evaluator/flows/check_drift.py
+    run: bash /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/scripts/check_drift.sh
     stdin: $drift_scan.stdout
 
   # ── Step 2: ORACLE_BATCH ─────────────────────────────────────
@@ -18,7 +18,7 @@ steps:
     stdin: null
 
   - id: oracle_check
-    run: python3 /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/evaluator/flows/check_oracle.py
+    run: bash /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/scripts/check_oracle.sh
     stdin: $oracle_batch.stdout
 
   # ── Step 3: AIE HEALTH CHECK ─────────────────────────────────
@@ -27,10 +27,5 @@ steps:
     stdin: null
 
   - id: health_parse
-    run: python3 /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/evaluator/flows/check_health.py
+    run: bash /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/scripts/check_health.sh
     stdin: $health_check.stdout
-
-output:
-  drift_status: $drift_check.stdout
-  oracle_status: $oracle_check.stdout
-  health_status: $health_parse.stdout
