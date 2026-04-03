@@ -1,10 +1,4 @@
-# aie_heartbeat.lobster — Autonomous AIE monitoring flow
-# Owner: zoul main session
-# Purpose: Drift scan + oracle evaluation + health check
-# Schedule: every 6h via cron
-
 name: aie_heartbeat
-owner: zoul
 description: "Autonomous drift scan + oracle evaluation + health check"
 
 steps:

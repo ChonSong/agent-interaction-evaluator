@@ -435,20 +435,17 @@ async def dispatch_method(
 async def run_server(ailogger: AILogger, socket_path: str) -> None:
     """Start the Unix socket server."""
     # Remove stale socket file
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.setblocking(False)
-
-    # Unlink existing socket
     try:
         os.unlink(socket_path)
     except FileNotFoundError:
         pass
 
-    sock.bind(socket_path)
-    sock.listen(32)
-    sock.setblocking(False)
+    server = await asyncio.start_unix_server(
+        lambda r, w: handle_client(r, w, ailogger),
+        socket_path,
+    )
 
-    # Make socket accessible to all users
+    # Make socket accessible to all users after binding
     os.chmod(socket_path, 0o777)
 
     logger.info("AILogger server listening on %s", socket_path)
@@ -458,36 +455,15 @@ async def run_server(ailogger: AILogger, socket_path: str) -> None:
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
 
-    loop = asyncio.get_event_loop()
-
-    async def accept_client():
-        while not ailogger._shutdown:
-            try:
-                client_reader, client_writer = await asyncio.wait_for(
-                    loop.sock_accept(sock),
-                    timeout=1.0,
-                )
-                asyncio.create_task(
-                    handle_client(client_reader, client_writer, ailogger)
-                )
-            except asyncio.TimeoutError:
-                continue
-            except OSError:
-                if not ailogger._shutdown:
-                    await asyncio.sleep(0.1)
-                    continue
-                break
+    async with server:
+        await server.serve_forever()
 
     try:
-        await accept_client()
-    finally:
-        sock.close()
-        try:
-            os.unlink(socket_path)
-        except FileNotFoundError:
-            pass
-        if PID_FILE.exists():
-            PID_FILE.unlink()
+        os.unlink(socket_path)
+    except FileNotFoundError:
+        pass
+    if PID_FILE.exists():
+        PID_FILE.unlink()
 
 
 # ---------------------------------------------------------------------------
