@@ -2,7 +2,7 @@
 """alert_and_halt.py — Read check outputs from JSON files, send Discord alerts, increment halt counter.
 
 Reads _drift_status.json and _oracle_status.json from data/
-Sends Discord DM to Alto (user 291686310714933258) if critical conditions found.
+Sends Discord alert to #evaluator-alerts if critical conditions found.
 Increments circuit breaker halt counters for affected sessions.
 Writes alerts to: data/alerts.log
 """
@@ -16,11 +16,12 @@ ORACLE_STATUS = os.path.join(DATA_DIR, "_oracle_status.json")
 
 
 def send_discord(msg: str) -> bool:
+    """Send a message to the #evaluator-alerts Discord channel."""
     try:
         r = subprocess.run(
             ["openclaw", "message", "send",
              "--channel", "discord",
-             "--target", "#291686310714933258",
+             "--target", "#evaluator-alerts",
              "--message", msg],
             capture_output=True, text=True, timeout=30,
         )
