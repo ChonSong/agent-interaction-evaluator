@@ -373,7 +373,7 @@ async def _insert_result(result, event):
 async def _send_alert(message: str, severity: str):
     import subprocess
     try:
-        subprocess.run(["openclaw", "message", "--channel", "evaluator-alerts", message], capture_output=True, timeout=10, check=False)
+        subprocess.run(["openclaw", "message", "send", "--channel", "discord", "--target", "#evaluator-alerts", "--message", message], capture_output=True, timeout=10, check=False)
     except:
         pass
 

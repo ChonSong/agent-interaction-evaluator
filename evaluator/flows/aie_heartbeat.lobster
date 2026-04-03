@@ -1,5 +1,5 @@
 name: aie_heartbeat
-description: "Autonomous drift scan + oracle evaluation + health check"
+description: "Autonomous drift scan + oracle evaluation + health check with circuit breaker"
 
 steps:
 
@@ -21,7 +21,14 @@ steps:
     run: bash /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/scripts/check_oracle.sh
     stdin: $oracle_batch.stdout
 
-  # ── Step 3: AIE HEALTH CHECK ─────────────────────────────────
+  # ── Step 3: ALERT & HALT ─────────────────────────────────────
+  # Reads _drift_status.json + _oracle_status.json from data/
+  # Sends Discord alert if critical conditions found, increments halt counters
+  - id: alert_and_halt
+    run: bash -c "cd /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo && PYTHONPATH=src python3 scripts/alert_and_halt.py"
+    stdin: null
+
+  # ── Step 4: AIE HEALTH CHECK ─────────────────────────────────
   - id: health_check
     run: bash -c "cd /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo && PYTHONPATH=src AILOGGER_SOCKET=evaluator/data/ailogger.sock python3 -m evaluator.logger status"
     stdin: null

@@ -27,6 +27,7 @@ def send_alert(
         message:  The alert message text.
         severity: One of "critical", "warning", "info".
         channel:  Discord channel (default from ALERT_CHANNEL env var).
+                 e.g., "#evaluator-alerts" or "123456789"
 
     Returns:
         True  — alert sent successfully (or logged for info)
@@ -44,9 +45,10 @@ def send_alert(
     full_message = f"{emoji} AIE Alert ({severity.upper()}): {message}"
 
     # Send via openclaw message tool
+    # Use --channel discord --target <channel> pattern
     try:
         result = subprocess.run(
-            ["openclaw", "message", "--channel", channel, full_message],
+            ["openclaw", "message", "send", "--channel", "discord", "--target", channel, "--message", full_message],
             capture_output=True,
             text=True,
             timeout=30,
