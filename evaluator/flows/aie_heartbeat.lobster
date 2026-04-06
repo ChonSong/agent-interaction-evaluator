@@ -25,12 +25,18 @@ steps:
   # Reads _drift_status.json + _oracle_status.json from data/
   # Sends Discord alert if critical conditions found, increments halt counters
   - id: alert_and_halt
-    run: bash -c "cd /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo && PYTHONPATH=src python3 scripts/alert_and_halt.py"
+    run: bash /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/scripts/alert_and_halt.py
     stdin: null
 
-  # ── Step 4: AIE HEALTH CHECK ─────────────────────────────────
+  # ── Step 4: OBSERVABILITY SUMMARY ───────────────────────────
+  # Post structured metrics report to #lurker — always fires, even on CLEAN
+  - id: observability_report
+    run: bash /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/scripts/post_observability.sh
+    stdin: null
+
+  # ── Step 5: AIE HEALTH CHECK ─────────────────────────────────
   - id: health_check
-    run: bash -c "cd /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo && PYTHONPATH=src AILOGGER_SOCKET=evaluator/data/ailogger.sock python3 -m evaluator.logger status"
+    run: bash /home/osboxes/.openclaw/workspace/zoul/agent-interaction-evaluator-repo/scripts/check_health.sh
     stdin: null
 
   - id: health_parse
