@@ -449,6 +449,15 @@ async def dispatch_method(
     elif method == "status":
         return await ailogger.handle_status()
 
+    elif method == "observability_summary":
+        from . import observability as obs
+        windows = params.get("windows", ["6h", "24h", "7d"])
+        return await obs.get_summary(windows=windows)
+
+    elif method == "observability_discord":
+        from . import observability as obs
+        return await obs.get_discord_summary()
+
     else:
         raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown method: {method!r}")
 
@@ -529,8 +538,24 @@ def _cmd_serve() -> None:
 
     socket_path = os.environ.get("AILOGGER_SOCKET", "/tmp/ailogger.sock")
 
+    # Start periodic observability snapshotter in background
+    from . import observability as obs
+    import asyncio
+
+    async def _run_with_observability():
+        # Initial snapshot on startup
+        try:
+            await obs.capture_snapshot()
+        except Exception as exc:
+            logger.warning("Initial observability snapshot failed: %s", exc)
+        # Start periodic snapshots every 5 minutes
+        snapshot_task = asyncio.create_task(obs.periodic_snapshot(interval_seconds=300))
+        # Run the server
+        await run_server(ailogger, socket_path)
+        snapshot_task.cancel()
+
     try:
-        asyncio.run(run_server(ailogger, socket_path))
+        asyncio.run(_run_with_observability())
     except KeyboardInterrupt:
         logger.info("Server interrupted")
 
