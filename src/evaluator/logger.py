@@ -329,6 +329,14 @@ class AILogger:
             self._txtai_available = False
             self._buffer_event(event)
 
+        # Phase 7: ship to Opik for UI observability — always fire, best-effort
+        # This runs regardless of txtai/drift/oracle outcome
+        try:
+            from . import opik_client as ok
+            asyncio.create_task(ok.emit_to_opik(event))
+        except Exception as opik_exc:
+            logger.debug("Opik emit skipped: %s", opik_exc)
+
     def _buffer_event(self, event: dict) -> None:
         """Add event to backpressure buffer."""
         self._buffer.append(event)
@@ -345,11 +353,24 @@ class AILogger:
                 self._check_and_alert_drift(event)
                 # Also evaluate against oracles on replayed events
                 self._evaluate_oracles(event)
+                # Also emit to Opik on replayed events
+                try:
+                    from . import opik_client as ok
+                    asyncio.create_task(ok.emit_to_opik(event))
+                except Exception:
+                    pass
             except Exception as exc:
                 # Put it back at front of buffer and stop
                 logger.warning("txtai re-index failed, stopping replay: %s", exc)
                 self._buffer.insert(0, event)
                 break
+
+            # Emit to Opik even during replay (best-effort)
+            try:
+                from . import opik_client as ok
+                asyncio.create_task(ok.emit_to_opik(event))
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------

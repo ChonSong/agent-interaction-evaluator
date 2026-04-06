@@ -28,6 +28,7 @@ dependencies = [
     "jsonschema",
     "pyyaml",
     "aiosqlite",
+    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
